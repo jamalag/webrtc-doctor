@@ -9,6 +9,7 @@ pub mod check;
 pub mod checks;
 pub mod pipeline;
 pub mod result;
+pub mod stun_codec;
 
 pub use check::{Check, ProbeContext};
 pub use pipeline::{Pipeline, Report, Verdict};

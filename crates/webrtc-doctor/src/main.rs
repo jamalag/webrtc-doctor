@@ -8,7 +8,7 @@ mod target;
 
 use clap::{Parser, Subcommand};
 use probe_core::{
-    checks::{dns::DnsCheck, stun::StunBindingCheck},
+    checks::{dns::DnsCheck, stun::StunBindingCheck, turn_alloc::TurnAllocateCheck},
     Pipeline, ProbeContext,
 };
 
@@ -96,11 +96,13 @@ async fn main() -> anyhow::Result<()> {
             ctx.turn_user = user;
             ctx.turn_pass = pass;
             let header = format!("probing {} (turn)", t.host);
-            // STUN binding before allocation; TURN alloc lands next.
             (
                 header,
                 ctx,
-                Pipeline::new().add(DnsCheck).add(StunBindingCheck),
+                Pipeline::new()
+                    .add(DnsCheck)
+                    .add(StunBindingCheck)
+                    .add(TurnAllocateCheck),
             )
         }
         Command::Turns { url, user, pass } => {
