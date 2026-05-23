@@ -7,7 +7,10 @@ mod render;
 mod target;
 
 use clap::{Parser, Subcommand};
-use probe_core::{checks::dns::DnsCheck, Pipeline, ProbeContext};
+use probe_core::{
+    checks::{dns::DnsCheck, stun::StunBindingCheck},
+    Pipeline, ProbeContext,
+};
 
 #[derive(Parser)]
 #[command(name = "webrtc-doctor", version, about = "WebRTC connectivity diagnostic")]
@@ -79,8 +82,11 @@ async fn main() -> anyhow::Result<()> {
             ctx.host = Some(t.host.clone());
             ctx.port = Some(t.port);
             let header = format!("probing {} (stun)", t.host);
-            // STUN binding check lands next; for now DNS is the only step.
-            (header, ctx, Pipeline::new().add(DnsCheck))
+            (
+                header,
+                ctx,
+                Pipeline::new().add(DnsCheck).add(StunBindingCheck),
+            )
         }
         Command::Turn { url, user, pass } => {
             let t = target::parse_stun_like(&url, 3478)?;
@@ -90,7 +96,12 @@ async fn main() -> anyhow::Result<()> {
             ctx.turn_user = user;
             ctx.turn_pass = pass;
             let header = format!("probing {} (turn)", t.host);
-            (header, ctx, Pipeline::new().add(DnsCheck))
+            // STUN binding before allocation; TURN alloc lands next.
+            (
+                header,
+                ctx,
+                Pipeline::new().add(DnsCheck).add(StunBindingCheck),
+            )
         }
         Command::Turns { url, user, pass } => {
             let t = target::parse_stun_like(&url, 5349)?;
@@ -100,6 +111,8 @@ async fn main() -> anyhow::Result<()> {
             ctx.turn_user = user;
             ctx.turn_pass = pass;
             let header = format!("probing {} (turns)", t.host);
+            // TLS isn't UDP — STUN binding doesn't belong here; checks land
+            // alongside the TLS handshake step.
             (header, ctx, Pipeline::new().add(DnsCheck))
         }
         Command::Signaling { url } => {
