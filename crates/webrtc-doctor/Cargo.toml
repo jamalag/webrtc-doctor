@@ -1,0 +1,23 @@
+[package]
+name = "webrtc-doctor"
+description = "Single-binary WebRTC connectivity diagnostic. Tests STUN/TURN/signaling reachability and reports a clear pass/fail."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+rust-version.workspace = true
+
+[[bin]]
+name = "webrtc-doctor"
+path = "src/main.rs"
+
+[dependencies]
+probe-core = { path = "../probe-core" }
+tokio = { workspace = true }
+anyhow = { workspace = true }
+clap = { workspace = true }
+colored = { workspace = true }
+serde_json = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }

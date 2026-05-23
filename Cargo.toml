@@ -1,0 +1,25 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/probe-core",
+    "crates/webrtc-doctor",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+license = "Apache-2.0"
+repository = "https://github.com/REPLACE_ME/webrtc-doctor"
+authors = ["Amir Eshaq <amir.a.eshaq@gmail.com>"]
+rust-version = "1.75"
+
+[workspace.dependencies]
+tokio = { version = "1", features = ["full"] }
+anyhow = "1"
+thiserror = "1"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+clap = { version = "4", features = ["derive"] }
+colored = "2"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }

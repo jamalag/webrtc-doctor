@@ -1,0 +1,23 @@
+[package]
+name = "probe-core"
+description = "WebRTC connectivity probe engine — runs ICE/STUN/TURN/DTLS checks against a target and emits structured results."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+tokio = { workspace = true }
+anyhow = { workspace = true }
+thiserror = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+tracing = { workspace = true }
+async-trait = "0.1"
+# WebRTC stack — added per-check as we implement them.
+# webrtc-ice = "0.10"
+# webrtc-dtls = "0.8"
+# stun = "0.6"
+# turn = "0.7"
