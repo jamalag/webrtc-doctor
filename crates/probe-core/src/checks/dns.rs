@@ -1,14 +1,26 @@
 //! DNS resolution check.
 //!
-//! Resolves `ctx.host` via the system's configured resolvers (read from
-//! `/etc/resolv.conf` on Unix and the registry on Windows), records the
+//! Resolves `ctx.host` through the OS resolver (`getaddrinfo`), records the
 //! returned A/AAAA addresses into `ctx.resolved_ips` for downstream checks,
 //! and reports per-host latency.
+//!
+//! We use `tokio::net::lookup_host` (i.e. `getaddrinfo` on a blocking pool)
+//! rather than a userspace resolver like hickory because:
+//!
+//! 1. A diagnostic tool should resolve names the way the user's apps do —
+//!    hosts file, mDNS, NRPT / split DNS, IPv6 preference, all included.
+//!    A userspace resolver bypasses every one of those.
+//! 2. Userspace resolvers wait out their per-server timeout when one of the
+//!    OS-configured upstreams is unreachable; `getaddrinfo` short-circuits.
+//!    We observed 10s stalls on Windows with hickory because of this.
+//! 3. One fewer transitive dependency tree.
 
+use std::collections::HashSet;
+use std::net::IpAddr;
 use std::time::Instant;
 
-use hickory_resolver::TokioAsyncResolver;
 use serde_json::json;
+use tokio::net::lookup_host;
 
 use crate::check::{Check, ProbeContext};
 use crate::result::CheckResult;
@@ -34,24 +46,15 @@ impl Check for DnsCheck {
             None => return CheckResult::skip(ID, NAME, "no host supplied"),
         };
 
+        // `lookup_host` requires a port; the port is irrelevant for DNS but
+        // tokio mirrors the `getaddrinfo` "service" parameter. Use the real
+        // port if we have one (purely cosmetic), 0 otherwise.
+        let port = ctx.port.unwrap_or(0);
+        let query = format!("{host}:{port}");
+
         let started = Instant::now();
-
-        // `from_system_conf` reads OS-level resolver config. On Windows that
-        // means the NRPT / interface DNS settings; on Unix, /etc/resolv.conf.
-        let resolver = match TokioAsyncResolver::tokio_from_system_conf() {
-            Ok(r) => r,
-            Err(e) => {
-                return CheckResult::fail(
-                    ID,
-                    NAME,
-                    started.elapsed().as_millis() as u64,
-                    format!("resolver init failed: {e}"),
-                );
-            }
-        };
-
-        let lookup = match resolver.lookup_ip(host.as_str()).await {
-            Ok(l) => l,
+        let iter = match lookup_host(query.as_str()).await {
+            Ok(it) => it,
             Err(e) => {
                 return CheckResult::fail(
                     ID,
@@ -62,7 +65,16 @@ impl Check for DnsCheck {
             }
         };
 
-        let ips: Vec<_> = lookup.iter().collect();
+        // `lookup_host` returns `SocketAddr`s — strip the port and dedupe.
+        let mut seen = HashSet::new();
+        let mut ips: Vec<IpAddr> = Vec::new();
+        for sa in iter {
+            let ip = sa.ip();
+            if seen.insert(ip) {
+                ips.push(ip);
+            }
+        }
+
         let latency_ms = started.elapsed().as_millis() as u64;
 
         if ips.is_empty() {
@@ -76,8 +88,6 @@ impl Check for DnsCheck {
 
         ctx.resolved_ips = ips.clone();
 
-        // Mimic the README's `host → ip (Nms)` shape; if multiple, show the
-        // first and a `(+N)`.
         let summary = if ips.len() == 1 {
             format!("{host} → {} ({} ms)", ips[0], latency_ms)
         } else {
