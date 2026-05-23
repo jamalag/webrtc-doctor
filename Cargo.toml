@@ -10,7 +10,7 @@ version = "0.1.0"
 edition = "2021"
 license = "Apache-2.0"
 repository = "https://github.com/REPLACE_ME/webrtc-doctor"
-authors = ["Amir Eshaq <amir.a.eshaq@gmail.com>"]
+authors = ["Amir Eshaq <jamalag@hotmail.com>"]
 rust-version = "1.75"
 
 [workspace.dependencies]
