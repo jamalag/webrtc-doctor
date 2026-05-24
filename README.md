@@ -215,10 +215,78 @@ webrtc-doctor turn "$(jq -r '.uris[0]' <<<"$creds" | sed 's/?.*//')" \
 Add `--json` to any subcommand to get the structured report:
 
 ```sh
-webrtc-doctor --json stun stun:stun.l.google.com:19302
+webrtc-doctor --json turn turn:turn.example.com:3478 --user alice --pass s3cret
 ```
 
-The JSON shape is stable and intended for CI pipelines and dashboards.
+The output shape is the contract — stable across versions, intended for CI
+pipelines, time-series dashboards, and the future hosted probe service.
+Every check has a stable `id`, a `status` (`pass` / `warn` / `fail` / `skip`),
+a `latency_ms`, a one-line `summary`, and a check-specific `detail` object
+that carries the structured fields the pretty output doesn't show
+(resolved IPs, server-reflexive address, allocated relay address, auth
+realm, allocation lifetime, etc.).
+
+<details>
+<summary>Example JSON output (click to expand)</summary>
+
+```json
+{
+  "results": [
+    {
+      "id": "dns",
+      "name": "DNS resolution",
+      "status": "pass",
+      "latency_ms": 6,
+      "summary": "turn.example.com → 203.0.113.10 (6 ms)",
+      "detail": {
+        "addresses": [
+          "203.0.113.10"
+        ],
+        "host": "turn.example.com"
+      }
+    },
+    {
+      "id": "stun.binding",
+      "name": "STUN binding",
+      "status": "pass",
+      "latency_ms": 169,
+      "summary": "srflx 198.51.100.42:52948 (169 ms)",
+      "detail": {
+        "server": "203.0.113.10:3478",
+        "srflx": "198.51.100.42:52948"
+      }
+    },
+    {
+      "id": "turn.alloc.udp",
+      "name": "TURN allocation (UDP)",
+      "status": "pass",
+      "latency_ms": 339,
+      "summary": "relay 203.0.113.10:49161 (lifetime 600s, 339 ms)",
+      "detail": {
+        "auth": "long-term",
+        "lifetime_s": 600,
+        "realm": "turn.example.com",
+        "relayed": "203.0.113.10:49161",
+        "server": "203.0.113.10:3478"
+      }
+    }
+  ],
+  "total_ms": 515
+}
+```
+
+The IPs above use [RFC 5737](https://datatracker.ietf.org/doc/html/rfc5737)
+documentation prefixes — `203.0.113.0/24` for the server side,
+`198.51.100.0/24` for the client side. A real run substitutes real addresses.
+
+</details>
+
+For most scripting, the **process exit code** is the right signal: `0`
+healthy, `1` failed, `2` warnings (see below). When you need per-check
+detail in a pipeline, `--json | jq` gives you it — e.g.
+`jq -e 'all(.results[]; .status != "fail")'` to gate CI on no failures,
+or pull `.results[] | select(.id=="turn.alloc.udp") | .latency_ms` into
+a TSDB. The pretty output is for humans, the JSON is for everything else.
 
 ### Exit codes
 
