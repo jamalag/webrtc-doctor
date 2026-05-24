@@ -9,7 +9,10 @@ mod target;
 use clap::{Parser, Subcommand};
 use probe_core::{
     checks::{
-        dns::DnsCheck, stun::StunBindingCheck, turn_alloc::TurnAllocateCheck,
+        dns::DnsCheck,
+        signaling::{host_from_url, SignalingCheck},
+        stun::StunBindingCheck,
+        turn_alloc::TurnAllocateCheck,
         turn_echo::TurnEchoCheck,
     },
     Pipeline, ProbeContext,
@@ -81,6 +84,11 @@ enum Command {
     Signaling {
         /// e.g. wss://signal.example.com/
         url: String,
+        /// Full Authorization header value (e.g. "Bearer eyJ...").
+        /// Same security caveats as TURN creds — prefer the env-var or
+        /// stdin-based variants once those land (tracked).
+        #[arg(long)]
+        auth_header: Option<String>,
     },
     /// Run the full suite against a deployment.
     Full {
@@ -99,6 +107,11 @@ async fn main() -> anyhow::Result<()> {
     tracing_subscriber::fmt()
         .with_env_filter(tracing_subscriber::EnvFilter::from_default_env())
         .init();
+
+    // rustls 0.23+ requires the process to choose a CryptoProvider exactly
+    // once. Doing it here means the signaling (and future TURNS) checks can
+    // open TLS connections without panicking on first use.
+    let _ = rustls::crypto::ring::default_provider().install_default();
 
     let (header, mut ctx, pipeline) = match cli.command {
         Command::Stun { url } => {
@@ -155,26 +168,19 @@ async fn main() -> anyhow::Result<()> {
             // alongside the TLS handshake step.
             (header, ctx, Pipeline::new().push(DnsCheck))
         }
-        Command::Signaling { url } => {
-            // Signaling URLs are real URLs; reuse the URL parser later. For
-            // now just extract the host via `url::Url` would be ideal, but to
-            // avoid pulling in `url` for a placeholder, hand-strip the scheme.
-            let host = url
-                .trim_start_matches("wss://")
-                .trim_start_matches("ws://")
-                .trim_start_matches("https://")
-                .trim_start_matches("http://")
-                .split('/')
-                .next()
-                .unwrap_or("")
-                .split(':')
-                .next()
-                .unwrap_or("")
-                .to_string();
+        Command::Signaling { url, auth_header } => {
+            // Extract host so DnsCheck has something concrete to resolve.
+            let host = host_from_url(&url)
+                .ok_or_else(|| anyhow::anyhow!("could not parse host from `{url}`"))?;
             let mut ctx = ProbeContext::new();
             ctx.host = Some(host.clone());
             let header = format!("probing {host} (signaling)");
-            (header, ctx, Pipeline::new().push(DnsCheck))
+
+            let mut sig = SignalingCheck::new(&url);
+            if let Some(h) = auth_header {
+                sig = sig.with_auth_header(h);
+            }
+            (header, ctx, Pipeline::new().push(DnsCheck).push(sig))
         }
         Command::Full { stun, .. } => {
             // Full mode will fan out to multiple sub-pipelines once we have

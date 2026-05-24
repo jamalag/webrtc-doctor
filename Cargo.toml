@@ -23,3 +23,7 @@ clap = { version = "4", features = ["derive"] }
 colored = "2"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+# Signaling WS/WSS probe. `rustls-tls-webpki-roots` keeps us pure-Rust and
+# trusts Mozilla's bundled CA roots. The TLS stack here is also what TURNS
+# will reuse when that check lands, so the dep weight pulls double duty.
+tokio-tungstenite = { version = "0.24", features = ["rustls-tls-webpki-roots"] }

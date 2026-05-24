@@ -21,3 +21,9 @@ colored = { workspace = true }
 serde_json = { workspace = true }
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
+# Direct dep so we can install rustls's crypto provider once at program
+# start. rustls 0.23+ requires explicit selection; we pick `ring` here
+# rather than `aws-lc-rs` for smaller binary size and no C toolchain
+# requirement on Windows. probe-core stays provider-agnostic so a SaaS
+# worker importing the library can choose differently.
+rustls = { version = "0.23", default-features = false, features = ["ring", "std"] }

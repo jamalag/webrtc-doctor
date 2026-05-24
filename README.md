@@ -43,10 +43,11 @@ prefixes — real runs print real ones, in ANSI color on a TTY.)
 
 ## Status
 
-Pre-alpha. The current build implements DNS, STUN binding, and TURN
-allocation over UDP (with long-term credential auth). TURNS, TURN echo,
-DTLS loopback, ICE gathering, and signaling probes are planned for
-v0.1.0 — see [`docs/PLAN.md`](docs/PLAN.md) for the design and roadmap.
+v0.1.0 is the first public release. Working checks: DNS, STUN binding,
+TURN allocation over UDP (long-term credentials), TURN echo round-trip
+(data-plane verification), and signaling WS/WSS connect. TURNS over TLS,
+DTLS handshake loopback, and ICE candidate gathering are planned for
+v0.2.0 — see [`docs/PLAN.md`](docs/PLAN.md) for the design and roadmap.
 
 ## Why
 
@@ -271,6 +272,35 @@ printf '%s\n%s\n' \
 | webrtc-doctor turn "$(jq -r '.uris[0]' <<<"$creds" | sed 's/?.*//')" \
     --user-stdin --pass-stdin
 ```
+
+### Probe a signaling endpoint (WS / WSS)
+
+A WebRTC deployment fails just as easily at the signaling layer as at
+the TURN/STUN layer. The `signaling` subcommand opens a WebSocket
+connection (TCP connect → TLS handshake if `wss://` → HTTP Upgrade →
+101 Switching Protocols), reports total handshake latency, and closes
+cleanly. Optional `--auth-header` attaches an Authorization header for
+gated endpoints.
+
+```sh
+webrtc-doctor signaling wss://echo.websocket.org
+webrtc-doctor signaling wss://signal.example.com/ \
+  --auth-header "Bearer eyJhbGciOi..."
+```
+
+Expected output:
+
+```
+webrtc-doctor 0.1.0 — probing signal.example.com (signaling)
+  ✓ dns        signal.example.com → 203.0.113.30 (15 ms)
+  ✓ signaling  wss connected, HTTP 101 (203 ms, auth OK)
+
+2 pass · 0 warn · 0 fail · 0 skip        verdict: HEALTHY
+```
+
+The Authorization header has the same secret-handling caveats as TURN
+credentials (visible in argv, shell history, process listings). A
+`--auth-header-stdin` companion flag is tracked as a follow-up.
 
 ### Machine-readable output
 
