@@ -1,5 +1,7 @@
 /target
-Cargo.lock
+# Cargo.lock IS committed for this workspace: the primary deliverable is a
+# binary (webrtc-doctor), so reproducible CLI builds across platforms matter
+# more than letting library consumers float to the latest patch versions.
 **/*.rs.bk
 .idea/
 .vscode/
