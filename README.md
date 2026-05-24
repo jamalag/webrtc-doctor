@@ -21,15 +21,16 @@ webrtc-doctor 0.1.0 — probing turn.example.com (turn)
 2 pass · 0 warn · 1 fail · 0 skip        verdict: FAILED
 ```
 
-**✅ Authentication working** (fresh credentials):
+**✅ Authentication working** (fresh credentials, full data-plane round-trip):
 
 ```text
 webrtc-doctor 0.1.0 — probing turn.example.com (turn)
   ✓ dns             turn.example.com → 203.0.113.10 (7 ms)
   ✓ stun.binding    srflx 198.51.100.42:53440 (171 ms)
   ✓ turn.alloc.udp  relay 203.0.113.10:49171 (lifetime 600s, 349 ms)
+  ✓ turn.echo.udp   24-byte round-trip 169 ms via 203.0.113.10:49171 (peer-as-self path)
 
-3 pass · 0 warn · 0 fail · 0 skip        verdict: HEALTHY
+4 pass · 0 warn · 0 fail · 0 skip        verdict: HEALTHY
 ```
 
 Same command, same target — different outcome. The failure isn't a
@@ -139,9 +140,15 @@ webrtc-doctor 0.1.0 — probing turn.example.com (turn)
   ✓ dns             turn.example.com → 203.0.113.10 (12 ms)
   ✓ stun.binding    srflx 198.51.100.42:52114 (31 ms)
   ✓ turn.alloc.udp  relay 203.0.113.10:49152 (lifetime 600s, 74 ms)
+  ✓ turn.echo.udp   24-byte round-trip 169 ms via 203.0.113.10:49152 (peer-as-self path)
 
-3 pass · 0 warn · 0 fail · 0 skip        verdict: HEALTHY
+4 pass · 0 warn · 0 fail · 0 skip        verdict: HEALTHY
 ```
+
+The `turn.echo.udp` step actually moves bytes through the relay
+(CreatePermission → datagram → Data Indication round-trip), so a green
+row here proves the data plane works — not just that allocation
+succeeded.
 
 Run with no `--user` / `--pass` and you'll still get a useful signal:
 the server's `401 Unauthorized` is reported as a warning with the auth
@@ -247,6 +254,8 @@ realm, allocation lifetime, etc.).
 
 ```json
 {
+  "verdict": "healthy",
+  "total_ms": 684,
   "results": [
     {
       "id": "dns",
@@ -285,9 +294,23 @@ realm, allocation lifetime, etc.).
         "relayed": "203.0.113.10:49161",
         "server": "203.0.113.10:3478"
       }
+    },
+    {
+      "id": "turn.echo.udp",
+      "name": "TURN echo (UDP)",
+      "status": "pass",
+      "latency_ms": 169,
+      "summary": "24-byte round-trip 169 ms via 203.0.113.10:49161 (peer-as-self path)",
+      "detail": {
+        "path": "client→relay→data-indication",
+        "payload_bytes": 24,
+        "peer": "198.51.100.42:52948",
+        "relayed": "203.0.113.10:49161",
+        "round_trip_ms": 169,
+        "server": "203.0.113.10:3478"
+      }
     }
-  ],
-  "total_ms": 515
+  ]
 }
 ```
 
@@ -298,11 +321,12 @@ documentation prefixes — `203.0.113.0/24` for the server side,
 </details>
 
 For most scripting, the **process exit code** is the right signal: `0`
-healthy, `1` failed, `2` warnings (see below). When you need per-check
-detail in a pipeline, `--json | jq` gives you it — e.g.
-`jq -e 'all(.results[]; .status != "fail")'` to gate CI on no failures,
-or pull `.results[] | select(.id=="turn.alloc.udp") | .latency_ms` into
-a TSDB. The pretty output is for humans, the JSON is for everything else.
+healthy, `1` failed, `2` warnings (see below). When you need more,
+`--json | jq` gives you the same outcome as a field
+(`jq -r .verdict` → `"healthy"` / `"warnings"` / `"failed"`) plus
+per-check detail you can pull into a TSDB — e.g.
+`jq '.results[] | select(.id=="turn.alloc.udp") | .latency_ms'`.
+The pretty output is for humans, the JSON is for everything else.
 
 ### Exit codes
 

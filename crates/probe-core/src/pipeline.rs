@@ -7,7 +7,8 @@
 
 use std::collections::HashSet;
 
-use serde::{Deserialize, Serialize};
+use serde::ser::SerializeStruct;
+use serde::{Deserialize, Serialize, Serializer};
 
 use crate::check::{Check, ProbeContext};
 use crate::result::{CheckResult, CheckStatus};
@@ -33,11 +34,29 @@ impl Verdict {
 }
 
 /// Aggregated outcome of a pipeline run.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+///
+/// `Serialize` is hand-rolled to inject the computed `verdict` field at the
+/// top of the JSON object — convenient for `jq` consumers and TSDB
+/// scrapers that want a single field to alert on, without having to fold
+/// over `results[].status`.
+#[derive(Debug, Clone)]
 pub struct Report {
     pub results: Vec<CheckResult>,
     /// Total wall-clock time across the whole pipeline, in milliseconds.
     pub total_ms: u64,
+}
+
+impl Serialize for Report {
+    fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        // Field order is preserved by serde_json — put the summary fields
+        // (verdict, total_ms) first so a human reading the JSON sees the
+        // outcome before scrolling through per-check detail.
+        let mut s = serializer.serialize_struct("Report", 3)?;
+        s.serialize_field("verdict", &self.verdict())?;
+        s.serialize_field("total_ms", &self.total_ms)?;
+        s.serialize_field("results", &self.results)?;
+        s.end()
+    }
 }
 
 impl Report {
