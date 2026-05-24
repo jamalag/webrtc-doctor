@@ -45,19 +45,37 @@ enum Command {
     Turn {
         /// e.g. turn:turn.example.com:3478
         url: String,
-        #[arg(long)]
+        /// TURN username. Avoid for sensitive creds (visible in process
+        /// listings + shell history) — use `--user-stdin` instead.
+        #[arg(long, conflicts_with = "user_stdin")]
         user: Option<String>,
-        #[arg(long)]
+        /// TURN password. Same caveat as --user; prefer `--pass-stdin`.
+        #[arg(long, conflicts_with = "pass_stdin")]
         pass: Option<String>,
+        /// Read TURN username from stdin (one line). When piping both,
+        /// stdin order is username first, then password.
+        #[arg(long)]
+        user_stdin: bool,
+        /// Read TURN password from stdin (one line).
+        #[arg(long)]
+        pass_stdin: bool,
     },
     /// Probe a TURN-over-TLS server (TURNS).
     Turns {
         /// e.g. turns:turn.example.com:5349 or :443
         url: String,
-        #[arg(long)]
+        #[arg(long, conflicts_with = "user_stdin")]
         user: Option<String>,
-        #[arg(long)]
+        #[arg(long, conflicts_with = "pass_stdin")]
         pass: Option<String>,
+        /// Read TURN username from stdin (one line).
+        #[arg(long)]
+        user_stdin: bool,
+        /// Read TURN password from stdin (one line). When both
+        /// `--user-stdin` and `--pass-stdin` are set, stdin order is
+        /// username first, then password.
+        #[arg(long)]
+        pass_stdin: bool,
     },
     /// Probe a signaling endpoint (WS/WSS connect + optional auth).
     Signaling {
@@ -95,13 +113,19 @@ async fn main() -> anyhow::Result<()> {
                 Pipeline::new().push(DnsCheck).push(StunBindingCheck),
             )
         }
-        Command::Turn { url, user, pass } => {
+        Command::Turn {
+            url,
+            user,
+            pass,
+            user_stdin,
+            pass_stdin,
+        } => {
             let t = target::parse_stun_like(&url, &["turn"], 3478)?;
             let mut ctx = ProbeContext::new();
             ctx.host = Some(t.host.clone());
             ctx.port = Some(t.port);
-            ctx.turn_user = user;
-            ctx.turn_pass = pass;
+            ctx.turn_user = resolve_secret(user, user_stdin, "TURN username")?;
+            ctx.turn_pass = resolve_secret(pass, pass_stdin, "TURN password")?;
             let header = format!("probing {} (turn)", t.host);
             (
                 header,
@@ -113,13 +137,19 @@ async fn main() -> anyhow::Result<()> {
                     .push(TurnEchoCheck),
             )
         }
-        Command::Turns { url, user, pass } => {
+        Command::Turns {
+            url,
+            user,
+            pass,
+            user_stdin,
+            pass_stdin,
+        } => {
             let t = target::parse_stun_like(&url, &["turns"], 5349)?;
             let mut ctx = ProbeContext::new();
             ctx.host = Some(t.host.clone());
             ctx.port = Some(t.port);
-            ctx.turn_user = user;
-            ctx.turn_pass = pass;
+            ctx.turn_user = resolve_secret(user, user_stdin, "TURN username")?;
+            ctx.turn_pass = resolve_secret(pass, pass_stdin, "TURN password")?;
             let header = format!("probing {} (turns)", t.host);
             // TLS isn't UDP — STUN binding doesn't belong here; checks land
             // alongside the TLS handshake step.
@@ -172,4 +202,40 @@ async fn main() -> anyhow::Result<()> {
     }
 
     std::process::exit(report.verdict().exit_code());
+}
+
+/// Resolve a secret either from its CLI flag value or, when the `*-stdin`
+/// switch is set, by reading one line from stdin. The CLI layer guarantees
+/// (via clap `conflicts_with`) that at most one source is set per secret.
+///
+/// On a TTY we print a short prompt to stderr so an interactive user knows
+/// the binary is waiting on them; on a pipe we stay silent so we don't
+/// pollute scripted environments.
+fn resolve_secret(
+    flag_value: Option<String>,
+    from_stdin: bool,
+    label: &str,
+) -> anyhow::Result<Option<String>> {
+    if !from_stdin {
+        return Ok(flag_value);
+    }
+    Ok(Some(read_line_from_stdin(label)?))
+}
+
+fn read_line_from_stdin(label: &str) -> anyhow::Result<String> {
+    use std::io::{BufRead, IsTerminal, Write};
+    if std::io::stdin().is_terminal() {
+        eprint!("{label}: ");
+        std::io::stderr().flush().ok();
+    }
+    let mut line = String::new();
+    std::io::stdin().lock().read_line(&mut line)?;
+    // Strip the trailing newline (LF on Unix, CRLF on Windows).
+    while matches!(line.chars().next_back(), Some('\n' | '\r')) {
+        line.pop();
+    }
+    if line.is_empty() {
+        anyhow::bail!("got empty input for {label} on stdin");
+    }
+    Ok(line)
 }

@@ -133,6 +133,16 @@ or any classic long-term credential setup):
 webrtc-doctor turn turn:turn.example.com:3478 --user alice --pass s3cret
 ```
 
+For anything that isn't a throwaway local test, prefer piping the
+credentials so they don't end up in shell history or process listings
+(see [Avoid putting secrets in argv](#avoid-putting-secrets-in-argv)
+below):
+
+```sh
+printf '%s\n%s\n' "$USER" "$PASS" \
+  | webrtc-doctor turn turn:turn.example.com:3478 --user-stdin --pass-stdin
+```
+
 Expected output on success:
 
 ```
@@ -211,16 +221,43 @@ again; expect a `✗ server rejected long-term credentials (401 after auth)`
 README, and the same recipe with fresh creds is what produces the
 **Authentication working** one.
 
+#### Avoid putting secrets in argv
+
+Anything you pass via `--user` / `--pass` is visible to:
+
+- Other users on the host via `ps` / `Get-Process`.
+- Your shell history (`~/.bash_history`, PowerShell's `ConsoleHost_history.txt`).
+- Most log aggregators that record process invocations.
+
+For anything beyond a quick local test, use `--user-stdin` and
+`--pass-stdin` instead. The flags read one line each from stdin, in
+that order:
+
+```sh
+# Both credentials on stdin (username first, then password):
+printf '%s\n%s\n' "$USER" "$PASS" | webrtc-doctor turn turn:turn.example.com:3478 \
+  --user-stdin --pass-stdin
+
+# Or pipe just the password, keep username on the command line:
+printf '%s\n' "$PASS" | webrtc-doctor turn turn:turn.example.com:3478 \
+  --user alice --pass-stdin
+```
+
+`--user` and `--user-stdin` are mutually exclusive (clap rejects the
+combination at parse time); same for `--pass` / `--pass-stdin`.
+
 #### Scripted version
 
-Once you've done it manually, a tiny wrapper makes it repeatable. PowerShell:
+Once you've done it manually, a tiny wrapper makes it repeatable, with
+secrets piped rather than baked into argv. PowerShell:
 
 ```powershell
 # Replace the URL and any auth headers with your app's actual flow.
 $c = Invoke-RestMethod "https://yourapp.example.com/api/turn-creds" `
        -Headers @{ Authorization = "Bearer $env:APP_TOKEN" }
-.\webrtc-doctor.exe turn "$($c.uris[0] -replace '\?.*','')" `
-  --user $c.username --pass $c.password
+"$($c.username)`n$($c.password)" | `
+  .\webrtc-doctor.exe turn "$($c.uris[0] -replace '\?.*','')" `
+    --user-stdin --pass-stdin
 ```
 
 bash + jq:
@@ -228,9 +265,11 @@ bash + jq:
 ```sh
 creds=$(curl -s -H "Authorization: Bearer $APP_TOKEN" \
           https://yourapp.example.com/api/turn-creds)
-webrtc-doctor turn "$(jq -r '.uris[0]' <<<"$creds" | sed 's/?.*//')" \
-  --user "$(jq -r .username <<<"$creds")" \
-  --pass "$(jq -r .password <<<"$creds")"
+printf '%s\n%s\n' \
+  "$(jq -r .username <<<"$creds")" \
+  "$(jq -r .password <<<"$creds")" \
+| webrtc-doctor turn "$(jq -r '.uris[0]' <<<"$creds" | sed 's/?.*//')" \
+    --user-stdin --pass-stdin
 ```
 
 ### Machine-readable output
