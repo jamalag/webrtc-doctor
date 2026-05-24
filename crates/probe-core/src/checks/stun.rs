@@ -112,8 +112,7 @@ impl Check for StunBindingCheck {
 
         match parse_binding_response(&buf[..n], &txid) {
             Ok(srflx) => {
-                ctx.scratch
-                    .insert("srflx".to_string(), srflx.to_string());
+                ctx.scratch.insert("srflx".to_string(), srflx.to_string());
                 CheckResult::pass(
                     ID,
                     NAME,

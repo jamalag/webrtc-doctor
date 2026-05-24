@@ -100,12 +100,7 @@ impl Check for TurnAllocateCheck {
 
         let outcome1 = match parse_allocate_response(&buf[..n1], &txid1) {
             Ok(o) => o,
-            Err(e) => {
-                return fail_now(
-                    started,
-                    format!("malformed Allocate response: {e}"),
-                )
-            }
+            Err(e) => return fail_now(started, format!("malformed Allocate response: {e}")),
         };
 
         let (realm, nonce) = match outcome1 {
@@ -128,12 +123,7 @@ impl Check for TurnAllocateCheck {
             }
             AllocateOutcome::Error { code, reason } => {
                 let ms = started.elapsed().as_millis() as u64;
-                return CheckResult::fail(
-                    ID,
-                    NAME,
-                    ms,
-                    format!("server returned {code} {reason}"),
-                );
+                return CheckResult::fail(ID, NAME, ms, format!("server returned {code} {reason}"));
             }
         };
 
@@ -177,12 +167,7 @@ impl Check for TurnAllocateCheck {
 
         let outcome2 = match parse_allocate_response(&buf[..n2], &txid2) {
             Ok(o) => o,
-            Err(e) => {
-                return fail_now(
-                    started,
-                    format!("malformed authed Allocate response: {e}"),
-                )
-            }
+            Err(e) => return fail_now(started, format!("malformed authed Allocate response: {e}")),
         };
 
         let ms = started.elapsed().as_millis() as u64;
@@ -209,12 +194,9 @@ impl Check for TurnAllocateCheck {
                 ms,
                 "server rejected long-term credentials (401 after auth)".to_string(),
             ),
-            AllocateOutcome::Error { code, reason } => CheckResult::fail(
-                ID,
-                NAME,
-                ms,
-                format!("allocate rejected: {code} {reason}"),
-            ),
+            AllocateOutcome::Error { code, reason } => {
+                CheckResult::fail(ID, NAME, ms, format!("allocate rejected: {code} {reason}"))
+            }
         }
     }
 }
@@ -225,18 +207,9 @@ fn fail_now(started: Instant, msg: String) -> CheckResult {
 
 #[derive(Debug)]
 enum AllocateOutcome {
-    Success {
-        relayed: SocketAddr,
-        lifetime: u32,
-    },
-    Unauthorized {
-        realm: String,
-        nonce: Vec<u8>,
-    },
-    Error {
-        code: u16,
-        reason: String,
-    },
+    Success { relayed: SocketAddr, lifetime: u32 },
+    Unauthorized { realm: String, nonce: Vec<u8> },
+    Error { code: u16, reason: String },
 }
 
 // ───── message builders ─────────────────────────────────────────────────
@@ -244,7 +217,11 @@ enum AllocateOutcome {
 fn build_allocate_unauth() -> ([u8; 12], Vec<u8>) {
     let txid = codec::new_txid();
     let mut msg = stun_header(ALLOCATE_REQUEST, &txid);
-    append_attr(&mut msg, attr::REQUESTED_TRANSPORT, &TRANSPORT_UDP.to_be_bytes());
+    append_attr(
+        &mut msg,
+        attr::REQUESTED_TRANSPORT,
+        &TRANSPORT_UDP.to_be_bytes(),
+    );
     set_attrs_length(&mut msg);
     (txid, msg)
 }
@@ -257,7 +234,11 @@ fn build_allocate_authed(
 ) -> ([u8; 12], Vec<u8>) {
     let txid = codec::new_txid();
     let mut msg = stun_header(ALLOCATE_REQUEST, &txid);
-    append_attr(&mut msg, attr::REQUESTED_TRANSPORT, &TRANSPORT_UDP.to_be_bytes());
+    append_attr(
+        &mut msg,
+        attr::REQUESTED_TRANSPORT,
+        &TRANSPORT_UDP.to_be_bytes(),
+    );
     append_attr(&mut msg, attr::USERNAME, username.as_bytes());
     append_attr(&mut msg, attr::REALM, realm.as_bytes());
     append_attr(&mut msg, attr::NONCE, nonce);
@@ -409,8 +390,8 @@ mod tests {
         // md5("user:example.com:pass"), pinned against the md-5 crate output
         // as a regression guard on the formula (not the digest impl).
         let expected: [u8; 16] = [
-            0xc1, 0x9c, 0x4c, 0x6e, 0x32, 0xf9, 0xd8, 0x02,
-            0x6b, 0x26, 0xba, 0x77, 0xc2, 0x1f, 0xb8, 0xeb,
+            0xc1, 0x9c, 0x4c, 0x6e, 0x32, 0xf9, 0xd8, 0x02, 0x6b, 0x26, 0xba, 0x77, 0xc2, 0x1f,
+            0xb8, 0xeb,
         ];
         assert_eq!(k, expected, "long-term key MD5 changed shape");
     }

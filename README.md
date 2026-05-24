@@ -1,5 +1,8 @@
 # webrtc-doctor
 
+[![CI](https://github.com/jamalag/webrtc-doctor/actions/workflows/ci.yml/badge.svg)](https://github.com/jamalag/webrtc-doctor/actions/workflows/ci.yml)
+[![License: Apache-2.0](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE-APACHE)
+
 A single-binary WebRTC connectivity diagnostic. Point it at any STUN, TURN,
 TURNS, or signaling endpoint and get a clear pass/fail report with timings
 for every step — DNS, UDP reachability, STUN binding, TURN allocation, TURN

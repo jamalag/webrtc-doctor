@@ -13,7 +13,11 @@ use probe_core::{
 };
 
 #[derive(Parser)]
-#[command(name = "webrtc-doctor", version, about = "WebRTC connectivity diagnostic")]
+#[command(
+    name = "webrtc-doctor",
+    version,
+    about = "WebRTC connectivity diagnostic"
+)]
 struct Cli {
     /// Emit machine-readable JSON instead of the pretty report.
     #[arg(long, global = true)]
@@ -85,7 +89,7 @@ async fn main() -> anyhow::Result<()> {
             (
                 header,
                 ctx,
-                Pipeline::new().add(DnsCheck).add(StunBindingCheck),
+                Pipeline::new().push(DnsCheck).push(StunBindingCheck),
             )
         }
         Command::Turn { url, user, pass } => {
@@ -100,9 +104,9 @@ async fn main() -> anyhow::Result<()> {
                 header,
                 ctx,
                 Pipeline::new()
-                    .add(DnsCheck)
-                    .add(StunBindingCheck)
-                    .add(TurnAllocateCheck),
+                    .push(DnsCheck)
+                    .push(StunBindingCheck)
+                    .push(TurnAllocateCheck),
             )
         }
         Command::Turns { url, user, pass } => {
@@ -115,7 +119,7 @@ async fn main() -> anyhow::Result<()> {
             let header = format!("probing {} (turns)", t.host);
             // TLS isn't UDP — STUN binding doesn't belong here; checks land
             // alongside the TLS handshake step.
-            (header, ctx, Pipeline::new().add(DnsCheck))
+            (header, ctx, Pipeline::new().push(DnsCheck))
         }
         Command::Signaling { url } => {
             // Signaling URLs are real URLs; reuse the URL parser later. For
@@ -136,7 +140,7 @@ async fn main() -> anyhow::Result<()> {
             let mut ctx = ProbeContext::new();
             ctx.host = Some(host.clone());
             let header = format!("probing {host} (signaling)");
-            (header, ctx, Pipeline::new().add(DnsCheck))
+            (header, ctx, Pipeline::new().push(DnsCheck))
         }
         Command::Full { stun, .. } => {
             // Full mode will fan out to multiple sub-pipelines once we have
@@ -151,7 +155,7 @@ async fn main() -> anyhow::Result<()> {
             ctx.host = Some(t.host.clone());
             ctx.port = Some(t.port);
             let header = format!("probing {} (full)", t.host);
-            (header, ctx, Pipeline::new().add(DnsCheck))
+            (header, ctx, Pipeline::new().push(DnsCheck))
         }
     };
 

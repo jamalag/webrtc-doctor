@@ -1,0 +1,58 @@
+name: CI
+
+# Runs on every push to main and every PR. Keeps the green-or-red signal
+# unambiguous: if the README badge is green, the latest main commit built
+# cleanly on Linux, macOS, and Windows with fmt, clippy, and tests passing.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+# Cancel superseded runs on the same branch (saves CI minutes on rapid pushes).
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+  # NOTE: We do NOT set RUSTFLAGS=-D warnings globally — that promotes
+  # *dependency* warnings to errors, and a future toolchain emitting a new
+  # deprecation in some transitive dep would break CI through no fault of
+  # ours. Instead, we deny warnings only via `cargo clippy -- -D warnings`,
+  # which scopes the policy to our own code.
+
+jobs:
+  # Formatting is platform-independent and fast — run it alone on Linux.
+  fmt:
+    name: rustfmt
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt
+      - run: cargo fmt --all --check
+
+  # Build, clippy, and test on the three target platforms. One matrix entry
+  # per OS; cargo cache shared per-OS so subsequent runs are fast.
+  test:
+    name: build & test (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false  # Surface all platform failures, not just the first.
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+      - uses: Swatinem/rust-cache@v2
+      - name: cargo clippy
+        run: cargo clippy --workspace --all-targets -- -D warnings
+      - name: cargo build
+        run: cargo build --workspace --verbose
+      - name: cargo test
+        run: cargo test --workspace --verbose

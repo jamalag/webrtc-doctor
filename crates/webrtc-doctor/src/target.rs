@@ -28,7 +28,13 @@ pub fn parse_stun_like(url: &str, allowed_schemes: &[&str], default_port: u16) -
     if !allowed_schemes.iter().any(|s| *s == scheme_lc) {
         let expected = match allowed_schemes {
             [one] => format!("a '{one}:' URI"),
-            many => format!("one of: {}", many.iter().map(|s| format!("'{s}:'")).collect::<Vec<_>>().join(", ")),
+            many => format!(
+                "one of: {}",
+                many.iter()
+                    .map(|s| format!("'{s}:'"))
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            ),
         };
         return Err(anyhow!(
             "this subcommand expects {expected}, got '{scheme}:' (in `{url}`)"
@@ -71,15 +77,24 @@ mod tests {
         // The exact case the user hit: stun: URI on the turn subcommand.
         let err = parse_stun_like("stun:host:3478", &["turn"], 3478).unwrap_err();
         let msg = format!("{err:#}");
-        assert!(msg.contains("'turn:'"), "msg should name expected scheme: {msg}");
-        assert!(msg.contains("'stun:'"), "msg should name the wrong scheme: {msg}");
+        assert!(
+            msg.contains("'turn:'"),
+            "msg should name expected scheme: {msg}"
+        );
+        assert!(
+            msg.contains("'stun:'"),
+            "msg should name the wrong scheme: {msg}"
+        );
     }
 
     #[test]
     fn lists_all_allowed_schemes_when_multiple() {
         let err = parse_stun_like("wss:host:443", &["turn", "turns"], 3478).unwrap_err();
         let msg = format!("{err:#}");
-        assert!(msg.contains("'turn:'") && msg.contains("'turns:'"), "msg: {msg}");
+        assert!(
+            msg.contains("'turn:'") && msg.contains("'turns:'"),
+            "msg: {msg}"
+        );
     }
 
     #[test]

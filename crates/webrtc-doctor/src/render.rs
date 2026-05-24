@@ -8,12 +8,7 @@ use probe_core::{CheckStatus, Report, Verdict};
 pub fn pretty(report: &Report, header: &str) {
     println!("webrtc-doctor {} — {}", probe_core::version(), header);
 
-    let max_id = report
-        .results
-        .iter()
-        .map(|r| r.id.len())
-        .max()
-        .unwrap_or(0);
+    let max_id = report.results.iter().map(|r| r.id.len()).max().unwrap_or(0);
 
     for r in &report.results {
         let glyph = match r.status {

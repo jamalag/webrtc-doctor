@@ -85,7 +85,11 @@ impl Pipeline {
         Self::default()
     }
 
-    pub fn add<C: Check + 'static>(mut self, check: C) -> Self {
+    /// Append a check to the pipeline. Named `push` (not `add`) to mirror
+    /// `Vec::push` semantics and to avoid shadowing `std::ops::Add::add`,
+    /// which `clippy::should_implement_trait` flags as a builder-pattern
+    /// pitfall.
+    pub fn push<C: Check + 'static>(mut self, check: C) -> Self {
         self.checks.push(Box::new(check));
         self
     }
