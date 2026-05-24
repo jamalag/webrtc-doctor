@@ -10,20 +10,35 @@ echo round-trip, DTLS handshake, ICE candidate gathering, signaling auth.
 
 Like `mtr` or `dig`, but for WebRTC.
 
-<table>
-  <tr>
-    <td align="center"><b>❌ Authentication broken</b></td>
-    <td align="center"><b>✅ Authentication working</b></td>
-  </tr>
-  <tr>
-    <td><img src="docs/screenshots/turn_failed.png" alt="webrtc-doctor pinpointing a 401-after-auth on a real TURN server" /></td>
-    <td><img src="docs/screenshots/turn_success.png" alt="webrtc-doctor showing a fully successful TURN allocation with per-step timings" /></td>
-  </tr>
-</table>
+**❌ Authentication broken** (expired or wrong credentials):
+
+```text
+webrtc-doctor 0.1.0 — probing turn.example.com (turn)
+  ✓ dns             turn.example.com → 203.0.113.10 (7 ms)
+  ✓ stun.binding    srflx 198.51.100.42:64070 (181 ms)
+  ✗ turn.alloc.udp  server rejected long-term credentials (401 after auth)
+
+2 pass · 0 warn · 1 fail · 0 skip        verdict: FAILED
+```
+
+**✅ Authentication working** (fresh credentials):
+
+```text
+webrtc-doctor 0.1.0 — probing turn.example.com (turn)
+  ✓ dns             turn.example.com → 203.0.113.10 (7 ms)
+  ✓ stun.binding    srflx 198.51.100.42:53440 (171 ms)
+  ✓ turn.alloc.udp  relay 203.0.113.10:49171 (lifetime 600s, 349 ms)
+
+3 pass · 0 warn · 0 fail · 0 skip        verdict: HEALTHY
+```
 
 Same command, same target — different outcome. The failure isn't a
-generic "ICE failed"; it's the exact protocol-level reason (`401 after
-auth`) with the layer that broke clearly named. That's the whole pitch.
+generic "ICE failed"; it's the exact protocol-level reason
+(`401 after auth`) with the layer that broke clearly named. That's
+the whole pitch. (Addresses above use [RFC 5737] documentation
+prefixes — real runs print real ones, in ANSI color on a TTY.)
+
+[RFC 5737]: https://datatracker.ietf.org/doc/html/rfc5737
 
 ## Status
 
@@ -185,8 +200,9 @@ of which the shell would otherwise mangle.
 
 If the cred TTL expires between step 1 and step 2, repeat step 1 and try
 again; expect a `✗ server rejected long-term credentials (401 after auth)`
-— that's exactly the left-hand screenshot at the top of this README, and
-the same recipe with fresh creds is what produces the right-hand one.
+— that's exactly the **Authentication broken** block at the top of this
+README, and the same recipe with fresh creds is what produces the
+**Authentication working** one.
 
 #### Scripted version
 
