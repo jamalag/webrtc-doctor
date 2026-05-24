@@ -7,6 +7,21 @@ echo round-trip, DTLS handshake, ICE candidate gathering, signaling auth.
 
 Like `mtr` or `dig`, but for WebRTC.
 
+<table>
+  <tr>
+    <td align="center"><b>❌ Authentication broken</b></td>
+    <td align="center"><b>✅ Authentication working</b></td>
+  </tr>
+  <tr>
+    <td><img src="docs/screenshots/turn_failed.png" alt="webrtc-doctor pinpointing a 401-after-auth on a real TURN server" /></td>
+    <td><img src="docs/screenshots/turn_success.png" alt="webrtc-doctor showing a fully successful TURN allocation with per-step timings" /></td>
+  </tr>
+</table>
+
+Same command, same target — different outcome. The failure isn't a
+generic "ICE failed"; it's the exact protocol-level reason (`401 after
+auth`) with the layer that broke clearly named. That's the whole pitch.
+
 ## Status
 
 Pre-alpha. The current build implements DNS, STUN binding, and TURN
@@ -166,7 +181,9 @@ contain `:` and passwords are usually base64 with `+` / `=` / `/`, all
 of which the shell would otherwise mangle.
 
 If the cred TTL expires between step 1 and step 2, repeat step 1 and try
-again; expect a `✗ server rejected long-term credentials (401 after auth)`.
+again; expect a `✗ server rejected long-term credentials (401 after auth)`
+— that's exactly the left-hand screenshot at the top of this README, and
+the same recipe with fresh creds is what produces the right-hand one.
 
 #### Scripted version
 
