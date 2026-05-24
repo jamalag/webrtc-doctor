@@ -77,7 +77,7 @@ async fn main() -> anyhow::Result<()> {
 
     let (header, mut ctx, pipeline) = match cli.command {
         Command::Stun { url } => {
-            let t = target::parse_stun_like(&url, 3478)?;
+            let t = target::parse_stun_like(&url, &["stun"], 3478)?;
             let mut ctx = ProbeContext::new();
             ctx.host = Some(t.host.clone());
             ctx.port = Some(t.port);
@@ -89,7 +89,7 @@ async fn main() -> anyhow::Result<()> {
             )
         }
         Command::Turn { url, user, pass } => {
-            let t = target::parse_stun_like(&url, 3478)?;
+            let t = target::parse_stun_like(&url, &["turn"], 3478)?;
             let mut ctx = ProbeContext::new();
             ctx.host = Some(t.host.clone());
             ctx.port = Some(t.port);
@@ -106,7 +106,7 @@ async fn main() -> anyhow::Result<()> {
             )
         }
         Command::Turns { url, user, pass } => {
-            let t = target::parse_stun_like(&url, 5349)?;
+            let t = target::parse_stun_like(&url, &["turns"], 5349)?;
             let mut ctx = ProbeContext::new();
             ctx.host = Some(t.host.clone());
             ctx.port = Some(t.port);
@@ -144,7 +144,9 @@ async fn main() -> anyhow::Result<()> {
             let any = stun.ok_or_else(|| {
                 anyhow::anyhow!("`full` currently requires --stun; more flags land next")
             })?;
-            let t = target::parse_stun_like(&any, 3478)?;
+            // `full` will route per-flag once we have more checks; for now
+            // it accepts whichever scheme the user gave to --stun.
+            let t = target::parse_stun_like(&any, &["stun", "turn", "turns"], 3478)?;
             let mut ctx = ProbeContext::new();
             ctx.host = Some(t.host.clone());
             ctx.port = Some(t.port);
