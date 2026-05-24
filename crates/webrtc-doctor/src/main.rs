@@ -169,6 +169,16 @@ async fn main() -> anyhow::Result<()> {
             (header, ctx, Pipeline::new().push(DnsCheck))
         }
         Command::Signaling { url, auth_header } => {
+            // Validate scheme up front so the user gets a clear error
+            // instead of tungstenite's generic "URL scheme not supported"
+            // surfacing two checks deep into the pipeline.
+            let scheme_ok = url.starts_with("ws://") || url.starts_with("wss://");
+            if !scheme_ok {
+                anyhow::bail!(
+                    "signaling expects a ws:// or wss:// URL, got `{url}` \
+                     (example: `wss://signal.example.com/`)"
+                );
+            }
             // Extract host so DnsCheck has something concrete to resolve.
             let host = host_from_url(&url)
                 .ok_or_else(|| anyhow::anyhow!("could not parse host from `{url}`"))?;
