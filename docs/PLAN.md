@@ -12,7 +12,13 @@ This document is the source of truth for what we're building, why, and how. It's
 
 **Why this exists.** When a WebRTC user reports "it's broken," developers' only diagnostics today are `webrtc-internals` Chrome dumps or Wireshark traces. There's no `dig`/`mtr` equivalent. We're building that.
 
-**Author context.** This project was spun out of the RustRDC monorepo (commercial, private, kept at `d:\DATA\Projects\rust\rust\` on the original dev machine). RustRDC is a WebRTC-based remote desktop product deployed at webrtconline.com. The author has built and shipped the whole WebRTC stack (signaling, ICE, TURN, DTLS-SRTP, data channels) in Rust there, and most of what `webrtc-doctor` needs has already been debugged once. **However, webrtc-doctor must remain a fully standalone OSS repo**: do not introduce path dependencies on RustRDC code, and do not copy proprietary code over. Use the `webrtc-rs` crates published on crates.io.
+**Constraints.** `webrtc-doctor` is a fully standalone OSS repo with no path
+dependencies on any private codebase. The WebRTC protocol implementations
+are either hand-rolled here (STUN binding and the TURN message family —
+the wire formats are small and stable) or pulled from the `webrtc-rs`
+crates published on crates.io. The Apache-2.0 license applies cleanly to
+everything in the tree; downstream consumers don't need to inherit any
+other license obligation.
 
 **Strategic role.** Two reasons to ship this first:
 1. Public OSS artifact + credibility receipt before going commercial.
@@ -255,20 +261,9 @@ Both land whenever convenient — they document the boundary by example.
 
 ---
 
-## Cross-references back to RustRDC (for the author)
-
-These are pointers, not dependencies. Use them as design references when implementing the equivalent in `probe-core`. Do not copy code over without re-licensing implications in mind.
-
-- **TURN credential handling**: RustRDC handles both long-term creds and REST-style time-limited creds. Probe-core needs both.
-- **Signaling client patterns**: URL trimming, WS auth headers, hostname-trim logic — all solved in RustRDC's signaling module.
-- **TLS-on-443 for TURN**: RustRDC's COTURN setup (docs/015 in the RustRDC repo) is the canonical real-world target — point `webrtc-doctor` at `webrtconline.com` to validate.
-
 ## Marketing the OSS release
 
 When v0.1 ships:
 - HN "Show HN" post with the example output above.
 - Cross-post to r/rust, r/webrtc, r/selfhosted.
 - Tweet at the webrtc-rs maintainers — credibility loop.
-- Tag in the RustRDC README as "built by the team behind RustRDC."
-
-That last point is the deliberate cross-pollination: free tool → developer audience → "what else do these people make?" → RustRDC.
