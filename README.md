@@ -21,6 +21,47 @@ When a WebRTC user says "it's broken," the only existing diagnostics are
 developers a one-shot, copy-pasteable readout of exactly which layer is
 failing and where.
 
+## How this differs from browser-based testers
+
+There are good in-browser STUN/TURN testers — [Trickle ICE], Twilio Network
+Test, the various "is my TURN server up?" web pages. They run real WebRTC
+inside the browser and tell you what the browser experienced. webrtc-doctor
+is a different tool for different questions.
+
+[Trickle ICE]: https://webrtc.github.io/samples/src/content/peerconnection/trickle-ice/
+
+**Browser testers are good at:** measuring the user's actual experience
+(because they use the same `RTCPeerConnection` code path), zero install,
+catching browser-specific NAT quirks. **What they can't do:** see the
+underlying STUN/TURN wire protocol, distinguish *why* a failure happened,
+run on a server, run in CI, run unattended, run on a schedule.
+
+**webrtc-doctor is good at:** protocol-level visibility (real STUN/TURN
+error codes, not just "ICE failed"), per-step timings, scriptability,
+exit codes, JSON output, running anywhere a binary runs.
+**What it can't do:** measure what an actual end-user's browser sees, since
+it doesn't run in a browser — it tells you whether the *server* is doing
+the right thing, not whether a specific human can reach it.
+
+Mnemonic: **browser testers answer "does it work for this human?"
+webrtc-doctor answers "is the server doing the right thing?"**
+
+| You want to know…                                          | Use                                |
+|------------------------------------------------------------|------------------------------------|
+| "Is my TURN server up right now?"                          | webrtc-doctor (run from cron)      |
+| "Did my last COTURN config change break auth?"             | webrtc-doctor in CI                |
+| "Why did this specific allocation fail?"                   | webrtc-doctor `--json`, read the error code |
+| "What's the p50 / p95 TURN alloc latency from us-east?"    | webrtc-doctor on a VPS → TSDB      |
+| "Does this user's Chrome generate srflx candidates?"       | Trickle ICE in their browser       |
+| "Does my customer in Singapore actually reach my TURN?"    | Browser tester (or, eventually, an embedded probe in your app) |
+| "Is my user behind a symmetric NAT that breaks P2P?"       | Browser tester                     |
+
+If you debug WebRTC bug reports one at a time, the existing browser tools
+are probably enough. The moment you want to **monitor** your infra,
+**alert** when it breaks, **catch regressions in CI**, or see protocol-
+level error codes instead of "ICE failed," there's no good existing tool
+in that quadrant. That's the gap webrtc-doctor fills.
+
 ## Build
 
 ```sh
