@@ -331,12 +331,12 @@ fn parse_allocate_response(buf: &[u8], txid: &[u8; 12]) -> Result<AllocateOutcom
                     attr::XOR_RELAYED_ADDRESS => {
                         relayed = Some(codec::parse_xor_address(a.value, txid)?);
                     }
-                    attr::LIFETIME => {
-                        if a.value.len() >= 4 {
-                            lifetime = u32::from_be_bytes([
-                                a.value[0], a.value[1], a.value[2], a.value[3],
-                            ]);
-                        }
+                    // Match guard (not nested `if`) keeps clippy's
+                    // collapsible_match family happy and reads as the
+                    // single conditional it actually is.
+                    attr::LIFETIME if a.value.len() >= 4 => {
+                        lifetime =
+                            u32::from_be_bytes([a.value[0], a.value[1], a.value[2], a.value[3]]);
                     }
                     _ => {}
                 }
