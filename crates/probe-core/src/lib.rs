@@ -11,7 +11,7 @@ pub mod pipeline;
 pub mod result;
 pub mod stun_codec;
 
-pub use check::{Check, ProbeContext};
+pub use check::{Check, ProbeContext, TurnSession};
 pub use pipeline::{Pipeline, Report, Verdict};
 pub use result::{CheckResult, CheckStatus};
 

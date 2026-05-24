@@ -8,7 +8,10 @@ mod target;
 
 use clap::{Parser, Subcommand};
 use probe_core::{
-    checks::{dns::DnsCheck, stun::StunBindingCheck, turn_alloc::TurnAllocateCheck},
+    checks::{
+        dns::DnsCheck, stun::StunBindingCheck, turn_alloc::TurnAllocateCheck,
+        turn_echo::TurnEchoCheck,
+    },
     Pipeline, ProbeContext,
 };
 
@@ -106,7 +109,8 @@ async fn main() -> anyhow::Result<()> {
                 Pipeline::new()
                     .push(DnsCheck)
                     .push(StunBindingCheck)
-                    .push(TurnAllocateCheck),
+                    .push(TurnAllocateCheck)
+                    .push(TurnEchoCheck),
             )
         }
         Command::Turns { url, user, pass } => {

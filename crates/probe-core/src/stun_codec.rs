@@ -22,6 +22,8 @@ pub mod attr {
     pub const ERROR_CODE: u16 = 0x0009;
     pub const REALM: u16 = 0x0014;
     pub const NONCE: u16 = 0x0015;
+    pub const XOR_PEER_ADDRESS: u16 = 0x0012;
+    pub const DATA: u16 = 0x0013;
     pub const XOR_MAPPED_ADDRESS: u16 = 0x0020;
     pub const XOR_RELAYED_ADDRESS: u16 = 0x0016;
     pub const REQUESTED_TRANSPORT: u16 = 0x0019;
@@ -143,6 +145,38 @@ pub fn parse_xor_address(value: &[u8], txid: &[u8; 12]) -> Result<SocketAddr, Co
     }
 }
 
+/// Encode a `SocketAddr` as the body of an `XOR-MAPPED-ADDRESS`-style
+/// attribute (also used for `XOR-PEER-ADDRESS` and `XOR-RELAYED-ADDRESS`).
+/// Layout: 1 byte reserved (0), 1 byte family, 2 bytes XOR-port, then the
+/// XOR-address (4 bytes for v4, 16 bytes for v6 with the cookie-plus-txid
+/// mask).
+pub fn build_xor_address(addr: SocketAddr, txid: &[u8; 12]) -> Vec<u8> {
+    let mut out = Vec::with_capacity(20);
+    out.push(0); // reserved
+    let xport = addr.port() ^ ((MAGIC_COOKIE >> 16) as u16);
+    match addr.ip() {
+        IpAddr::V4(v4) => {
+            out.push(0x01);
+            out.extend_from_slice(&xport.to_be_bytes());
+            let raw = u32::from(v4);
+            let xaddr = raw ^ MAGIC_COOKIE;
+            out.extend_from_slice(&xaddr.to_be_bytes());
+        }
+        IpAddr::V6(v6) => {
+            out.push(0x02);
+            out.extend_from_slice(&xport.to_be_bytes());
+            let mut mask = [0u8; 16];
+            mask[..4].copy_from_slice(&MAGIC_COOKIE.to_be_bytes());
+            mask[4..].copy_from_slice(txid);
+            let raw = v6.octets();
+            for i in 0..16 {
+                out.push(raw[i] ^ mask[i]);
+            }
+        }
+    }
+    out
+}
+
 /// Decode a legacy (pre-RFC 5389) `MAPPED-ADDRESS` — no XOR.
 pub fn parse_mapped_address(value: &[u8]) -> Result<SocketAddr, CodecError> {
     if value.len() < 4 {
@@ -200,4 +234,27 @@ pub fn new_txid() -> [u8; 12] {
     let stack_addr = (&txid as *const _ as usize) as u32;
     txid[8..].copy_from_slice(&stack_addr.to_be_bytes());
     txid
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn xor_address_roundtrips_v4() {
+        let txid = [0xAAu8; 12];
+        let addr: SocketAddr = "192.0.2.5:31415".parse().unwrap();
+        let encoded = build_xor_address(addr, &txid);
+        let decoded = parse_xor_address(&encoded, &txid).unwrap();
+        assert_eq!(decoded, addr);
+    }
+
+    #[test]
+    fn xor_address_roundtrips_v6() {
+        let txid = [0x55u8; 12];
+        let addr: SocketAddr = "[2001:db8::1]:8080".parse().unwrap();
+        let encoded = build_xor_address(addr, &txid);
+        let decoded = parse_xor_address(&encoded, &txid).unwrap();
+        assert_eq!(decoded, addr);
+    }
 }

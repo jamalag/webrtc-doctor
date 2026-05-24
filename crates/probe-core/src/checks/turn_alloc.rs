@@ -13,6 +13,7 @@
 //! when we have a paranoid-mode flag.
 
 use std::net::{IpAddr, SocketAddr};
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use hmac::{Hmac, Mac};
@@ -22,7 +23,7 @@ use sha1::Sha1;
 use tokio::net::UdpSocket;
 use tokio::time::timeout;
 
-use crate::check::{Check, ProbeContext};
+use crate::check::{Check, ProbeContext, TurnSession};
 use crate::result::CheckResult;
 use crate::stun_codec::{self as codec, attr};
 
@@ -69,8 +70,10 @@ impl Check for TurnAllocateCheck {
             IpAddr::V4(_) => "0.0.0.0:0".parse().unwrap(),
             IpAddr::V6(_) => "[::]:0".parse().unwrap(),
         };
+        // Wrap in Arc up front so we can hand it to ctx.turn_session for
+        // turn_echo to reuse without a second allocation round-trip.
         let sock = match UdpSocket::bind(local_bind).await {
-            Ok(s) => s,
+            Ok(s) => Arc::new(s),
             Err(e) => return fail_now(started, format!("local UDP bind failed: {e}")),
         };
 
@@ -174,6 +177,16 @@ impl Check for TurnAllocateCheck {
         match outcome2 {
             AllocateOutcome::Success { relayed, lifetime } => {
                 ctx.scratch.insert("relayed".into(), relayed.to_string());
+                // Save the live session for downstream checks (turn_echo).
+                ctx.turn_session = Some(TurnSession {
+                    socket: sock.clone(),
+                    server,
+                    relayed,
+                    realm: realm.clone(),
+                    nonce: nonce.clone(),
+                    key,
+                    username: user.clone(),
+                });
                 CheckResult::pass(
                     ID,
                     NAME,

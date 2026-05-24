@@ -1,8 +1,11 @@
 //! The Check trait and the shared context passed through a pipeline run.
 
 use std::collections::HashMap;
-use std::net::IpAddr;
+use std::net::{IpAddr, SocketAddr};
+use std::sync::Arc;
 use std::time::Duration;
+
+use tokio::net::UdpSocket;
 
 use crate::result::CheckResult;
 
@@ -22,9 +25,38 @@ pub struct ProbeContext {
     /// TURN credentials, when supplied.
     pub turn_user: Option<String>,
     pub turn_pass: Option<String>,
+    /// Post-allocation TURN session state. Populated by `turn.alloc.udp` and
+    /// consumed by `turn.echo.udp` so the echo check can reuse the same
+    /// authenticated socket (and same nonce/key) instead of allocating again.
+    pub turn_session: Option<TurnSession>,
     /// Arbitrary key/value bag for cross-check state we haven't promoted to a
     /// typed field yet.
     pub scratch: HashMap<String, String>,
+}
+
+/// Everything a downstream TURN check needs to send authenticated requests
+/// against the existing allocation (CreatePermission, Refresh, ChannelBind…)
+/// without redoing the long-term-credential handshake.
+#[derive(Debug, Clone)]
+pub struct TurnSession {
+    /// The UDP socket that already established the 5-tuple with the TURN
+    /// server. `Arc` because the allocator owned it briefly and downstream
+    /// checks need shared access; the socket itself is `Send`/`Sync`.
+    pub socket: Arc<UdpSocket>,
+    /// The TURN server's address we've been talking to.
+    pub server: SocketAddr,
+    /// The relay address the server allocated for us.
+    pub relayed: SocketAddr,
+    /// Realm the server requested in its 401 challenge (used in MI key).
+    pub realm: String,
+    /// Most recent nonce the server gave us. May need rotation on 438 Stale
+    /// Nonce; that handling lives in the check that hits the staleness.
+    pub nonce: Vec<u8>,
+    /// Long-term credential key — `MD5(user:realm:pass)`.
+    pub key: [u8; 16],
+    /// Username we authenticated with (echoed back in every MI-protected
+    /// request against this allocation).
+    pub username: String,
 }
 
 impl ProbeContext {
