@@ -32,6 +32,9 @@ This document is the source of truth for what we're building, why, and how. It's
 - DNS resolution check
 - UDP reachability + STUN binding (reflexive address discovery)
 - TURN allocation over UDP / TCP / TLS-5349 / TLS-443
+  - Credentials passed via `--user` / `--pass` only. Fetching short-lived
+    creds from a REST endpoint is deliberately a SaaS feature — see
+    "Case study: TURN credentials" below.
 - TURN echo round-trip (`CreatePermission` → `Send` → `Data`)
 - DTLS handshake against a self-loopback peer in the same process
 - ICE candidate gathering (host, srflx, relay) with per-type counts and timings
@@ -220,6 +223,35 @@ To keep the OSS/SaaS boundary clean:
 - **Customer-facing dashboards or widget JS.** SaaS-only.
 
 `probe-core` exports a clean library API. The SaaS imports it without modification.
+
+### Case study: TURN credentials (the boundary, applied)
+
+A concrete decision that proves the boundary holds — recorded here so the next person doesn't relitigate it.
+
+**The situation.** Most real WebRTC deployments don't hand out static TURN passwords. They use the TURN REST API convention (draft-uberti-behave-turn-rest, what COTURN's `use-auth-secret` mode implements): the client signs in, the server returns a `{username, password, ttl}` triple where the username encodes an expiry timestamp and the password is `base64(HMAC-SHA1(shared-secret, username))`. The wire protocol against TURN is unchanged — standard long-term credentials, MESSAGE-INTEGRITY computed against `MD5(username:realm:password)` — but obtaining the creds requires an authenticated HTTP request to the customer's own endpoint.
+
+**The temptation.** Add `--turn-creds-from <URL>` to the OSS CLI. Looks like a small QoL feature.
+
+**Why we do not, in OSS.** Three reasons compound:
+
+1. **Dependency weight.** Pulls in `reqwest` plus a TLS stack (`rustls` or `native-tls`), `hyper`, `h2`, et al. — a real bump for a single-binary diagnostic whose runtime deps today are `tokio` + `serde` + small crypto primitives.
+2. **No universal schema.** Twilio returns `{username, credential, urls[]}`. COTURN admins ship `{username, password, ttl}`. Cloudflare uses gRPC-ish wrapped shapes. Auth varies (bearer, cookie, basic, OAuth, mTLS, signed JWTs). Supporting "fetch creds from a URL" honestly means supporting *N* customer-specific flows — a per-customer adapter problem.
+3. **Wrong audience for the OSS.** The OSS user is an operator with shell access who can `curl | jq | xargs webrtc-doctor`. The README documents that recipe. Unix composition is the OSS-friendly answer; we don't build what `curl` already does.
+
+**Why it is first-class in the SaaS.** Same feature, completely different value proposition:
+
+1. **Per-customer credential provider** is config in the orchestrator: URL template, vault-stored auth secret, expected JSON schema (or a small adapter per weird customer). Operationally normal for a SaaS, painful for a CLI.
+2. **Refresh logic** — cache creds until TTL minus a safety margin, refetch transparently. Mandatory for a probe running every 60 seconds; nonsense for a one-shot CLI invocation.
+3. **It is the moat.** Anyone can pipe `curl` into `webrtc-doctor`. Almost nobody wants to wire up authenticated, refreshing, multi-region probes against a TURN with REST-style creds. That work is exactly what customers will pay to outsource.
+
+**The general principle this case illustrates.** The OSS/SaaS boundary lives at "the wire protocol vs. the operational concerns around running it." `probe-core` owns wire protocols. The SaaS owns auth flows, scheduling, persistence, fleet management, tenancy. Anytime a feature request looks like it sits on that fence, this case is the precedent: keep `probe-core` pure, push the operational layer up into the SaaS.
+
+**Cheap things the OSS can still do** to make it ergonomic to pair with an external creds fetcher (no boundary violation):
+
+- `--user-stdin` / `--pass-stdin` (read secrets from stdin instead of argv, so they don't show in `ps`). ~10 lines, no new deps.
+- A README "Fetching short-lived creds" recipe with bash + PowerShell snippets using `curl` / `Invoke-RestMethod` + `jq`.
+
+Both land whenever convenient — they document the boundary by example.
 
 ---
 
