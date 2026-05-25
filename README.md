@@ -577,9 +577,14 @@ docs/
 
 ## Contributing
 
-This is pre-alpha and the check surface is changing weekly. If you have a
-WebRTC connectivity bug you'd like the tool to diagnose, opening an issue
-with the failure case is more valuable than a PR right now.
+This is pre-1.0 — the JSON contract may still change between minor
+versions (see the v0.3.0 notes for an example), and the check inventory
+may grow. The wire-level code in `probe-core` has been live-validated
+against production COTURN, Google STUN, real WS/WSS endpoints, and
+cross-process DTLS round-trips, but the project hasn't been
+battle-tested by anyone other than its author yet. If you have a
+WebRTC connectivity bug you'd like the tool to diagnose, opening an
+issue with the failure case is more valuable than a PR right now.
 
 ## License
 
