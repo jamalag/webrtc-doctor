@@ -443,6 +443,50 @@ against an actual `RTCPeerConnection` you still need full ICE on both
 sides; webrtc-doctor's DTLS check is the network-and-protocol layer,
 not a browser substitute.
 
+### Test a whole deployment in one shot
+
+When you operate a WebRTC stack and need a single readout of "does
+this thing work end-to-end," `full` runs every layer you give it a
+URL for. Each URL gets its own sub-pipeline (DNS + the protocol
+check); the results concatenate into one report with a single
+verdict.
+
+```sh
+webrtc-doctor full \
+  --signaling wss://signal.example.com/ \
+  --stun stun:stun.example.com:3478 \
+  --turn turn:turn.example.com:3478 \
+  --turns turns:turn.example.com:5349 \
+  --user-stdin --pass-stdin <<<$'USERNAME\nPASSWORD'
+```
+
+Expected output:
+
+```
+webrtc-doctor 0.6.0 — probing signaling signal.example.com + stun stun.example.com + turn turn.example.com + turns turn.example.com (full)
+  ✓ dns             signal.example.com → 203.0.113.30 (15 ms)
+  ✓ signaling       wss connected, HTTP 101 (203 ms, auth OK)
+  ✓ dns             stun.example.com → 203.0.113.10 (12 ms)
+  ✓ stun.binding    srflx 198.51.100.42:53627 (35 ms)
+  ✓ dns             turn.example.com → 203.0.113.10 (8 ms)
+  ✓ stun.binding    srflx 198.51.100.42:54200 (33 ms)
+  ✓ turn.alloc.udp  relay 203.0.113.10:49165 (lifetime 600s, 281 ms)
+  ✓ turn.echo.udp   10/10 echoes, loss 0%, rtt min/avg/max = 162/169/178 ms via 203.0.113.10:49165
+  ✓ dns             turn.example.com → 203.0.113.10 (3 ms)
+  ✓ turn.alloc.tls  relay 203.0.113.10:49170 (lifetime 600s, TLS 124 ms, total 412 ms)
+
+10 pass · 0 warn · 0 fail · 0 skip        verdict: HEALTHY
+```
+
+At least one of `--stun` / `--turn` / `--turns` / `--signaling` must
+be given; missing any layer just skips the corresponding
+sub-pipeline. `--user` / `--pass` (and the stdin variants) cover
+both `--turn` and `--turns` — the typical case where the same realm
+serves both ports. Each sub-pipeline runs its own DNS step, so a
+target with a different host stays cleanly isolated. The exit code
+follows the same `0 = healthy, 2 = warn, 1 = fail` rule as
+single-target subcommands.
+
 ### Machine-readable output
 
 Add `--json` to any subcommand to get the structured report:

@@ -18,7 +18,7 @@ use probe_core::{
         turn_echo::TurnEchoCheck,
         turns_alloc::TurnsAllocateCheck,
     },
-    Pipeline, ProbeContext,
+    Pipeline, ProbeContext, Report,
 };
 
 #[derive(Parser)]
@@ -158,13 +158,56 @@ enum Command {
         pass_stdin: bool,
     },
     /// Run the full suite against a deployment.
+    ///
+    /// One subcommand to test every layer of a real WebRTC stack you
+    /// operate: STUN reachability, TURN allocation + relay echo, TURNS
+    /// for firewall traversal, and the signaling endpoint. At least one
+    /// of `--stun` / `--turn` / `--turns` / `--signaling` must be given;
+    /// each provided URL runs its own sub-pipeline (DNS + the protocol
+    /// check) and the results concatenate into a single report.
+    ///
+    /// Credentials (`--user` / `--pass` and their stdin variants) are
+    /// shared between `--turn` and `--turns`, which is the common case
+    /// for a single deployment. Run the per-protocol subcommands
+    /// directly if you need distinct credentials per URL.
     Full {
+        /// STUN URL, e.g. stun:stun.l.google.com:19302
         #[arg(long)]
         stun: Option<String>,
+        /// TURN URL, e.g. turn:turn.example.com:3478
         #[arg(long)]
         turn: Option<String>,
+        /// TURNS URL, e.g. turns:turn.example.com:5349
+        #[arg(long)]
+        turns: Option<String>,
+        /// Signaling URL, e.g. wss://signal.example.com/
         #[arg(long)]
         signaling: Option<String>,
+        /// TURN/TURNS username (shared between --turn and --turns).
+        #[arg(long, conflicts_with = "user_stdin")]
+        user: Option<String>,
+        /// TURN/TURNS password.
+        #[arg(long, conflicts_with = "pass_stdin")]
+        pass: Option<String>,
+        /// Read TURN username from stdin (one line).
+        #[arg(long)]
+        user_stdin: bool,
+        /// Read TURN password from stdin (one line). When both
+        /// `--user-stdin` and `--pass-stdin` are set, stdin order is
+        /// username first, then password.
+        #[arg(long)]
+        pass_stdin: bool,
+        /// Authorization header for the signaling endpoint, if any.
+        #[arg(long, conflicts_with = "auth_header_stdin")]
+        auth_header: Option<String>,
+        /// Read the Authorization header from stdin (one line).
+        /// Read after TURN credentials (if those are also from stdin):
+        /// username → password → auth header.
+        #[arg(long)]
+        auth_header_stdin: bool,
+        /// Number of TURN echo packets to send through the relay.
+        #[arg(long, default_value_t = 10)]
+        echo_count: u32,
     },
 }
 
@@ -344,20 +387,43 @@ async fn main() -> anyhow::Result<()> {
             pipeline = pipeline.push(IceGatherCheck);
             (header, ctx, pipeline)
         }
-        Command::Full { stun, .. } => {
-            // Full mode will fan out to multiple sub-pipelines once we have
-            // them. For v0.0.1 it runs DNS against whichever target was given.
-            let any = stun.ok_or_else(|| {
-                anyhow::anyhow!("`full` currently requires --stun; more flags land next")
-            })?;
-            // `full` will route per-flag once we have more checks; for now
-            // it accepts whichever scheme the user gave to --stun.
-            let t = target::parse_stun_like(&any, &["stun", "turn", "turns"], 3478)?;
-            let mut ctx = ProbeContext::new();
-            ctx.host = Some(t.host.clone());
-            ctx.port = Some(t.port);
-            let header = format!("probing {} (full)", t.host);
-            (header, ctx, Pipeline::new().push(DnsCheck))
+        Command::Full {
+            stun,
+            turn,
+            turns,
+            signaling,
+            user,
+            pass,
+            user_stdin,
+            pass_stdin,
+            auth_header,
+            auth_header_stdin,
+            echo_count,
+        } => {
+            // `full` runs multiple sub-pipelines and concatenates their
+            // results into one report; it doesn't fit the
+            // (ctx, pipeline) -> Report shape the single-target
+            // subcommands use. Handle the whole thing here and exit.
+            let (header, report) = run_full(
+                stun,
+                turn,
+                turns,
+                signaling,
+                user,
+                pass,
+                user_stdin,
+                pass_stdin,
+                auth_header,
+                auth_header_stdin,
+                echo_count,
+            )
+            .await?;
+            if cli.json {
+                render::json(&report)?;
+            } else if !cli.quiet {
+                render::pretty(&report, &header);
+            }
+            std::process::exit(report.verdict().exit_code());
         }
     };
 
@@ -370,6 +436,118 @@ async fn main() -> anyhow::Result<()> {
     }
 
     std::process::exit(report.verdict().exit_code());
+}
+
+/// Run the `full` subcommand: build a sub-pipeline per provided URL,
+/// run each in its own `ProbeContext`, and concatenate their results
+/// into one report. The single shared verdict reflects the worst
+/// outcome across all sub-pipelines (Fail > Warn > Pass).
+///
+/// Each sub-pipeline does its own DNS step. That's mild duplication
+/// when targets share a host, but the alternative — threading a
+/// per-target DNS cache through ctx — is far more code for an MVP
+/// gain. Live runs against a single deployment usually finish well
+/// under a second total.
+#[allow(clippy::too_many_arguments)]
+async fn run_full(
+    stun: Option<String>,
+    turn: Option<String>,
+    turns: Option<String>,
+    signaling: Option<String>,
+    user: Option<String>,
+    pass: Option<String>,
+    user_stdin: bool,
+    pass_stdin: bool,
+    auth_header: Option<String>,
+    auth_header_stdin: bool,
+    echo_count: u32,
+) -> anyhow::Result<(String, Report)> {
+    if stun.is_none() && turn.is_none() && turns.is_none() && signaling.is_none() {
+        anyhow::bail!("`full` needs at least one of --stun / --turn / --turns / --signaling");
+    }
+
+    // Resolve all secrets up front so we read stdin exactly once, in a
+    // documented order (username → password → auth header). Letting each
+    // sub-pipeline read stdin on demand would deadlock the second
+    // consumer.
+    let turn_user = resolve_secret(user, user_stdin, "TURN username")?;
+    let turn_pass = resolve_secret(pass, pass_stdin, "TURN password")?;
+    let auth = resolve_secret(auth_header, auth_header_stdin, "Authorization header")?;
+
+    let started = std::time::Instant::now();
+    let mut all_results = Vec::new();
+    let mut header_parts: Vec<String> = Vec::new();
+
+    // Order: signaling first (cheapest, independent), then stun, then
+    // turn (which subsumes stun internally via its dns→stun.binding→
+    // turn.alloc chain), then turns. Each block is gated on its URL.
+
+    if let Some(url) = signaling.as_deref() {
+        if !(url.starts_with("ws://") || url.starts_with("wss://")) {
+            anyhow::bail!("--signaling expects a ws:// or wss:// URL, got `{url}`");
+        }
+        let host = host_from_url(url)
+            .ok_or_else(|| anyhow::anyhow!("could not parse host from --signaling `{url}`"))?;
+        header_parts.push(format!("signaling {host}"));
+        let mut ctx = ProbeContext::new();
+        ctx.host = Some(host);
+        let mut sig = SignalingCheck::new(url);
+        if let Some(h) = auth.clone() {
+            sig = sig.with_auth_header(h);
+        }
+        let pipeline = Pipeline::new().push(DnsCheck).push(sig);
+        let report = pipeline.run(&mut ctx).await;
+        all_results.extend(report.results);
+    }
+
+    if let Some(url) = stun.as_deref() {
+        let t = target::parse_stun_like(url, &["stun"], 3478)?;
+        header_parts.push(format!("stun {}", t.host));
+        let mut ctx = ProbeContext::new();
+        ctx.host = Some(t.host.clone());
+        ctx.port = Some(t.port);
+        let pipeline = Pipeline::new().push(DnsCheck).push(StunBindingCheck);
+        let report = pipeline.run(&mut ctx).await;
+        all_results.extend(report.results);
+    }
+
+    if let Some(url) = turn.as_deref() {
+        let t = target::parse_stun_like(url, &["turn"], 3478)?;
+        header_parts.push(format!("turn {}", t.host));
+        let mut ctx = ProbeContext::new();
+        ctx.host = Some(t.host.clone());
+        ctx.port = Some(t.port);
+        ctx.turn_user = turn_user.clone();
+        ctx.turn_pass = turn_pass.clone();
+        ctx.echo_count = echo_count;
+        let pipeline = Pipeline::new()
+            .push(DnsCheck)
+            .push(StunBindingCheck)
+            .push(TurnAllocateCheck)
+            .push(TurnEchoCheck);
+        let report = pipeline.run(&mut ctx).await;
+        all_results.extend(report.results);
+    }
+
+    if let Some(url) = turns.as_deref() {
+        let t = target::parse_stun_like(url, &["turns"], 5349)?;
+        header_parts.push(format!("turns {}", t.host));
+        let mut ctx = ProbeContext::new();
+        ctx.host = Some(t.host.clone());
+        ctx.port = Some(t.port);
+        ctx.turn_user = turn_user.clone();
+        ctx.turn_pass = turn_pass.clone();
+        let pipeline = Pipeline::new().push(DnsCheck).push(TurnsAllocateCheck);
+        let report = pipeline.run(&mut ctx).await;
+        all_results.extend(report.results);
+    }
+
+    let report = Report {
+        results: all_results,
+        total_ms: started.elapsed().as_millis() as u64,
+    };
+    let header = format!("probing {} (full)", header_parts.join(" + "));
+    Ok((header, report))
 }
 
 /// Resolve a secret either from its CLI flag value or, when the `*-stdin`
