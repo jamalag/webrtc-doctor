@@ -10,6 +10,7 @@ use clap::{Parser, Subcommand};
 use probe_core::{
     checks::{
         dns::DnsCheck,
+        dtls_loopback::DtlsLoopbackCheck,
         ice_gather::IceGatherCheck,
         signaling::{host_from_url, SignalingCheck},
         stun::StunBindingCheck,
@@ -100,6 +101,14 @@ enum Command {
         #[arg(long)]
         auth_header_stdin: bool,
     },
+    /// Run a DTLS handshake loopback (in-process, no network target).
+    ///
+    /// Spins up a DTLS listener on 127.0.0.1, dials it from a second
+    /// task in the same process, completes the handshake, and reports
+    /// the peer-certificate SHA-256 fingerprint in SDP format. Useful
+    /// as a build-and-link smoke test: proves the DTLS implementation
+    /// is wired in and works, independent of any remote endpoint.
+    Dtls,
     /// Gather ICE candidates against a STUN or TURN server.
     ///
     /// Enumerates local interface addresses (host candidates), uses STUN
@@ -235,6 +244,11 @@ async fn main() -> anyhow::Result<()> {
                 sig = sig.with_auth_header(h);
             }
             (header, ctx, Pipeline::new().push(DnsCheck).push(sig))
+        }
+        Command::Dtls => {
+            let ctx = ProbeContext::new();
+            let header = "dtls loopback (in-process)".to_string();
+            (header, ctx, Pipeline::new().push(DtlsLoopbackCheck))
         }
         Command::Ice {
             url,

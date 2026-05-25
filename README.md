@@ -43,13 +43,13 @@ prefixes — real runs print real ones, in ANSI color on a TTY.)
 
 ## Status
 
-Latest release is v0.3.0. Working checks today: DNS, STUN binding,
-TURN allocation over UDP (long-term credentials), multi-packet TURN
-echo (data-plane loss/jitter stats), TURN allocation over TLS (TURNS),
-signaling WS/WSS connect, and ICE candidate gathering (host + srflx +
-relay enumeration, the same three types a real `RTCPeerConnection`
-collects). DTLS handshake loopback is still planned — see
-[`docs/PLAN.md`](docs/PLAN.md) for the design and roadmap.
+Latest release is v0.4.0; `main` is moving toward v0.5.0. Working
+checks today: DNS, STUN binding, TURN allocation over UDP (long-term
+credentials), multi-packet TURN echo (data-plane loss/jitter stats),
+TURN allocation over TLS (TURNS), signaling WS/WSS connect, ICE
+candidate gathering (host + srflx + relay), and DTLS handshake
+loopback (in-process smoke test). The MVP roadmap from
+[`docs/PLAN.md`](docs/PLAN.md) is essentially complete.
 
 ## Why
 
@@ -378,6 +378,35 @@ link-local (`fe80::/10`) are filtered out — they're never useful
 ICE candidates. Private RFC 1918 ranges and IPv6 ULA *are* kept;
 they're valid host candidates on a LAN even though useless across
 the public internet.
+
+### DTLS handshake smoke test
+
+`webrtc-doctor dtls` runs a DTLS handshake against itself — server on
+one task, client on another, both inside the same process talking over
+`127.0.0.1`. No network target needed. The check proves the DTLS layer
+is wired in and works, and reports the negotiated peer-certificate
+SHA-256 fingerprint in the same format SDP uses (`a=fingerprint:sha-256
+AA:BB:CC:...`).
+
+```sh
+webrtc-doctor dtls
+```
+
+Expected output:
+
+```
+webrtc-doctor 0.5.0 — dtls loopback (in-process)
+  ✓ dtls.loopback  handshake OK in 3 ms; peer fp sha-256 28:D0:C8:F3:99:42:08:4F
+
+1 pass · 0 warn · 0 fail · 0 skip        verdict: HEALTHY
+```
+
+`--json` exposes the full 32-byte fingerprint plus the negotiated SRTP
+protection profile (which is `Unsupported` here — we don't configure
+`use_srtp`, so the handshake is plain DTLS without the SRTP key
+derivation extension). For diagnosing a *real* WebRTC DTLS failure
+against a remote peer you still need full ICE on both sides; this is
+a build-and-link smoke test, intentionally local.
 
 ### Machine-readable output
 

@@ -36,3 +36,18 @@ webpki-roots = "0.26"
 # cross-platform crate, no transitive deps of consequence. We use it only
 # to list local addresses; binding/socket work goes through tokio.
 if-addrs = "0.13"
+# DTLS loopback check. webrtc-rs's pure-Rust DTLS implementation; the only
+# real choice given rustls still doesn't support DTLS. We use it solely
+# for a handshake-against-self diagnostic, not for a full transport.
+webrtc-dtls = "0.12"
+# webrtc-dtls's listener API exposes `Listener::accept`/`addr` from
+# this crate's `Conn`/`Listener` traits; we need them in scope to call
+# either method. webrtc-dtls doesn't re-export them, so we depend on
+# webrtc-util directly and pin to the same version webrtc-dtls 0.12
+# pulled in transitively to avoid duplicate copies in the dep graph.
+webrtc-util = { version = "0.11", default-features = false, features = ["conn"] }
+# SHA-256 for the DTLS peer-cert fingerprint. webrtc-dtls returns peer
+# certs as DER bytes; the SDP `a=fingerprint` format hashes that and
+# emits colon-separated hex. We already pull sha1 for STUN MI; sha2 is
+# the corresponding hash family.
+sha2 = "0.10"

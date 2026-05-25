@@ -23,6 +23,9 @@ tokio-tungstenite = { workspace = true }
 tokio-rustls = { workspace = true }
 webpki-roots = { workspace = true }
 if-addrs = { workspace = true }
+webrtc-dtls = { workspace = true }
+webrtc-util = { workspace = true }
+sha2 = { workspace = true }
 # WebRTC stack — added per-check as we implement them.
 # webrtc-ice = "0.10"
 # webrtc-dtls = "0.8"
