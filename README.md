@@ -43,12 +43,13 @@ prefixes — real runs print real ones, in ANSI color on a TTY.)
 
 ## Status
 
-v0.1.0 is the first public release; `main` is moving toward v0.2.0.
-Working checks today: DNS, STUN binding, TURN allocation over UDP
-(long-term credentials), TURN echo round-trip (data-plane verification),
-TURN allocation over TLS (TURNS), and signaling WS/WSS connect.
-DTLS handshake loopback and ICE candidate gathering are still planned
-— see [`docs/PLAN.md`](docs/PLAN.md) for the design and roadmap.
+Latest release is v0.3.0. Working checks today: DNS, STUN binding,
+TURN allocation over UDP (long-term credentials), multi-packet TURN
+echo (data-plane loss/jitter stats), TURN allocation over TLS (TURNS),
+signaling WS/WSS connect, and ICE candidate gathering (host + srflx +
+relay enumeration, the same three types a real `RTCPeerConnection`
+collects). DTLS handshake loopback is still planned — see
+[`docs/PLAN.md`](docs/PLAN.md) for the design and roadmap.
 
 ## Why
 
@@ -334,6 +335,49 @@ printf '%s\n' "Bearer $TOKEN" \
 
 `--auth-header` and `--auth-header-stdin` are mutually exclusive
 (clap rejects the combination at parse time).
+
+### Gather ICE candidates
+
+A real `RTCPeerConnection` builds a list of candidate transport
+addresses before it can connect — host (local interface), srflx
+(public address learned via STUN), and relay (TURN-allocated). The
+`ice` subcommand enumerates the same three types so you can see
+exactly what a browser would see, without opening DevTools:
+
+```sh
+# host candidates + srflx via STUN
+webrtc-doctor ice stun:stun.l.google.com:19302
+
+# host + srflx + relay (single URL — production TURN servers also
+# serve STUN binding on the same port)
+webrtc-doctor ice turn:turn.example.com:3478 \
+  --user-stdin --pass-stdin <<<$'USERNAME\nPASSWORD'
+```
+
+Expected output:
+
+```
+webrtc-doctor 0.3.0 — probing turn.example.com (ice)
+  ✓ dns             turn.example.com → 203.0.113.10 (8 ms)
+  ✓ stun.binding    srflx 198.51.100.42:49768 (35 ms)
+  ✓ turn.alloc.udp  relay 203.0.113.10:49165 (lifetime 600s, 281 ms)
+  ✓ ice.gather      4 candidates (2 host, 1 srflx, 1 relay)
+      host   192.168.1.42:0                (Ethernet)
+      host   [2603:6010:6c00:abcd::42]:0   (Ethernet)
+      srflx  198.51.100.42:49768           via stun:turn.example.com:3478
+      relay  203.0.113.10:49165            via turn:turn.example.com:3478
+
+4 pass · 0 warn · 0 fail · 0 skip        verdict: HEALTHY
+```
+
+Host ports show as `:0` because `ice.gather` enumerates addresses
+rather than binding a socket per candidate; the srflx and relay
+ports are real (those came from actual connections in the earlier
+checks). Loopback, IPv4 link-local APIPA (169.254/16), and IPv6
+link-local (`fe80::/10`) are filtered out — they're never useful
+ICE candidates. Private RFC 1918 ranges and IPv6 ULA *are* kept;
+they're valid host candidates on a LAN even though useless across
+the public internet.
 
 ### Machine-readable output
 

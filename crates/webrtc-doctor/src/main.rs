@@ -10,6 +10,7 @@ use clap::{Parser, Subcommand};
 use probe_core::{
     checks::{
         dns::DnsCheck,
+        ice_gather::IceGatherCheck,
         signaling::{host_from_url, SignalingCheck},
         stun::StunBindingCheck,
         turn_alloc::TurnAllocateCheck,
@@ -98,6 +99,31 @@ enum Command {
         /// Read the full Authorization header value from stdin (one line).
         #[arg(long)]
         auth_header_stdin: bool,
+    },
+    /// Gather ICE candidates against a STUN or TURN server.
+    ///
+    /// Enumerates local interface addresses (host candidates), uses STUN
+    /// to discover the server-reflexive address (srflx), and — when the
+    /// URL uses the `turn:` scheme and credentials are supplied —
+    /// allocates a TURN relay candidate. Same three candidate types a
+    /// real `RTCPeerConnection` collects during gathering.
+    ///
+    /// One URL is enough because production TURN servers almost always
+    /// serve STUN Binding on the same port (it's a subset of the TURN
+    /// protocol). If your TURN doesn't, use the `stun` subcommand to
+    /// confirm STUN works, and the `turn` subcommand to confirm TURN
+    /// works.
+    Ice {
+        /// stun:... for host+srflx, or turn:... for host+srflx+relay
+        url: String,
+        #[arg(long, conflicts_with = "user_stdin")]
+        user: Option<String>,
+        #[arg(long, conflicts_with = "pass_stdin")]
+        pass: Option<String>,
+        #[arg(long)]
+        user_stdin: bool,
+        #[arg(long)]
+        pass_stdin: bool,
     },
     /// Run the full suite against a deployment.
     Full {
@@ -209,6 +235,35 @@ async fn main() -> anyhow::Result<()> {
                 sig = sig.with_auth_header(h);
             }
             (header, ctx, Pipeline::new().push(DnsCheck).push(sig))
+        }
+        Command::Ice {
+            url,
+            user,
+            pass,
+            user_stdin,
+            pass_stdin,
+        } => {
+            let t = target::parse_stun_like(&url, &["stun", "turn"], 3478)?;
+            let is_turn = url.starts_with("turn:");
+            let mut ctx = ProbeContext::new();
+            ctx.host = Some(t.host.clone());
+            ctx.port = Some(t.port);
+            let header = format!("probing {} (ice)", t.host);
+            let mut pipeline = Pipeline::new().push(DnsCheck).push(StunBindingCheck);
+            if is_turn {
+                ctx.turn_user = resolve_secret(user, user_stdin, "TURN username")?;
+                ctx.turn_pass = resolve_secret(pass, pass_stdin, "TURN password")?;
+                pipeline = pipeline.push(TurnAllocateCheck);
+            } else if user.is_some() || pass.is_some() || user_stdin || pass_stdin {
+                // Friendly nudge: credentials with a stun: URL get ignored
+                // silently otherwise.
+                anyhow::bail!(
+                    "credentials supplied but URL scheme is `stun:`; use a `turn:` URL \
+                     to collect a relay candidate"
+                );
+            }
+            pipeline = pipeline.push(IceGatherCheck);
+            (header, ctx, pipeline)
         }
         Command::Full { stun, .. } => {
             // Full mode will fan out to multiple sub-pipelines once we have

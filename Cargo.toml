@@ -32,3 +32,7 @@ tokio-tungstenite = { version = "0.24", features = ["rustls-tls-webpki-roots"] }
 # the system trust store.
 tokio-rustls = { version = "0.26", default-features = false, features = ["ring"] }
 webpki-roots = "0.26"
+# Host-interface enumeration for the ICE candidate-gathering check. Tiny
+# cross-platform crate, no transitive deps of consequence. We use it only
+# to list local addresses; binding/socket work goes through tokio.
+if-addrs = "0.13"
