@@ -379,34 +379,69 @@ ICE candidates. Private RFC 1918 ranges and IPv6 ULA *are* kept;
 they're valid host candidates on a LAN even though useless across
 the public internet.
 
-### DTLS handshake smoke test
+### DTLS handshake
 
-`webrtc-doctor dtls` runs a DTLS handshake against itself — server on
-one task, client on another, both inside the same process talking over
-`127.0.0.1`. No network target needed. The check proves the DTLS layer
-is wired in and works, and reports the negotiated peer-certificate
-SHA-256 fingerprint in the same format SDP uses (`a=fingerprint:sha-256
-AA:BB:CC:...`).
+`webrtc-doctor dtls` covers three modes through one subcommand. In all
+of them the output reports the negotiated peer-certificate SHA-256
+fingerprint in SDP format (`a=fingerprint:sha-256 AA:BB:CC:...`) plus
+the handshake duration.
+
+**Loopback (no arguments)** — in-process smoke test. Spins up a DTLS
+server on one task and a client on another, both talking over
+`127.0.0.1`. Proves the DTLS layer is wired in and works without
+needing any network target.
 
 ```sh
 webrtc-doctor dtls
 ```
 
-Expected output:
-
 ```
 webrtc-doctor 0.5.0 — dtls loopback (in-process)
-  ✓ dtls.loopback  handshake OK in 3 ms; peer fp sha-256 28:D0:C8:F3:99:42:08:4F
-
-1 pass · 0 warn · 0 fail · 0 skip        verdict: HEALTHY
+  ✓ dtls.loopback  handshake OK in 3 ms (loopback); peer fp sha-256 28:D0:C8:F3:99:42:08:4F
 ```
 
-`--json` exposes the full 32-byte fingerprint plus the negotiated SRTP
-protection profile (which is `Unsupported` here — we don't configure
-`use_srtp`, so the handshake is plain DTLS without the SRTP key
-derivation extension). For diagnosing a *real* WebRTC DTLS failure
-against a remote peer you still need full ICE on both sides; this is
-a build-and-link smoke test, intentionally local.
+**Against a remote peer** — dial a DTLS endpoint, report the result.
+Useful when you control the other side (or know it speaks DTLS).
+
+```sh
+webrtc-doctor dtls dtls.example.com:5684
+```
+
+```
+webrtc-doctor 0.5.0 — probing dtls.example.com:5684 (dtls)
+  ✓ dns          dtls.example.com → 203.0.113.50 (12 ms)
+  ✓ dtls.remote  handshake OK in 87 ms (via 203.0.113.50:5684); peer fp sha-256 C4:CA:C4:DA:63:22:EB:A8
+```
+
+**Serve mode** — turn `webrtc-doctor` itself into a DTLS test peer so
+you can verify the network path without third-party infrastructure.
+Run on a VPS / lab box, then dial it from anywhere:
+
+```sh
+# on the remote box
+webrtc-doctor dtls --serve --bind 0.0.0.0:5684
+
+# on the client
+webrtc-doctor dtls remote.example.com:5684
+```
+
+The server logs the source address of every accepted handshake so you
+can confirm the client actually reached you (and from which NAT). It
+keeps running until killed.
+
+All three modes use self-signed certificates and `insecure_skip_verify`
+— this is a transport-reachability + protocol-correctness diagnostic,
+not a chain-of-trust validator. That mirrors what WebRTC itself does
+over an ICE candidate pair: DTLS authenticates via the SHA-256
+fingerprint pre-shared in SDP, not via a CA bundle.
+
+`--json` exposes the full 32-byte fingerprint, peer-cert DER byte
+length, and the negotiated SRTP protection profile (`Unsupported`
+here, because we don't configure `use_srtp` — honest answer for a
+plain-DTLS handshake). For diagnosing a *real* WebRTC DTLS failure
+against an actual `RTCPeerConnection` you still need full ICE on both
+sides; webrtc-doctor's DTLS check is the network-and-protocol layer,
+not a browser substitute.
 
 ### Machine-readable output
 

@@ -10,7 +10,7 @@ use clap::{Parser, Subcommand};
 use probe_core::{
     checks::{
         dns::DnsCheck,
-        dtls_loopback::DtlsLoopbackCheck,
+        dtls::{serve_forever, DtlsLoopbackCheck, DtlsRemoteCheck},
         ice_gather::IceGatherCheck,
         signaling::{host_from_url, SignalingCheck},
         stun::StunBindingCheck,
@@ -101,14 +101,37 @@ enum Command {
         #[arg(long)]
         auth_header_stdin: bool,
     },
-    /// Run a DTLS handshake loopback (in-process, no network target).
+    /// DTLS handshake: in-process loopback, against a remote peer, or
+    /// listen-mode for being someone else's remote.
     ///
-    /// Spins up a DTLS listener on 127.0.0.1, dials it from a second
-    /// task in the same process, completes the handshake, and reports
-    /// the peer-certificate SHA-256 fingerprint in SDP format. Useful
-    /// as a build-and-link smoke test: proves the DTLS implementation
-    /// is wired in and works, independent of any remote endpoint.
-    Dtls,
+    /// With no arguments, runs an in-process loopback handshake — a
+    /// build-and-link smoke test that proves the DTLS layer is wired
+    /// in.
+    ///
+    /// With `<target>` (e.g. `dtls.example.com:5684`), dials the
+    /// remote DTLS endpoint and reports the handshake outcome plus the
+    /// peer-certificate SHA-256 fingerprint in SDP format. Pair with
+    /// another instance of webrtc-doctor running in `--serve` mode on
+    /// the remote side for a no-third-party round-trip test.
+    ///
+    /// With `--serve`, becomes a DTLS test peer: listens on `--bind`,
+    /// accepts handshakes from any client, logs each, and keeps
+    /// running until killed.
+    Dtls {
+        /// Remote DTLS endpoint to dial, e.g. `host.example.com:5684`.
+        /// Omit for loopback mode. Ignored when `--serve` is set.
+        target: Option<String>,
+        /// Run as a DTLS test peer instead of dialing. Accepts handshakes
+        /// from any client until the process is killed.
+        #[arg(long, conflicts_with = "target")]
+        serve: bool,
+        /// Address to listen on in serve mode. Defaults to `0.0.0.0:5684`
+        /// (the IANA-assigned port for CoAP-over-DTLS — a convenient
+        /// default that doesn't clash with the common 4444 / 5349 / 3478
+        /// ports the other subcommands use).
+        #[arg(long, default_value = "0.0.0.0:5684", requires = "serve")]
+        bind: String,
+    },
     /// Gather ICE candidates against a STUN or TURN server.
     ///
     /// Enumerates local interface addresses (host candidates), uses STUN
@@ -245,10 +268,52 @@ async fn main() -> anyhow::Result<()> {
             }
             (header, ctx, Pipeline::new().push(DnsCheck).push(sig))
         }
-        Command::Dtls => {
-            let ctx = ProbeContext::new();
-            let header = "dtls loopback (in-process)".to_string();
-            (header, ctx, Pipeline::new().push(DtlsLoopbackCheck))
+        Command::Dtls {
+            target,
+            serve,
+            bind,
+        } => {
+            if serve {
+                // Server mode bypasses the pipeline/report machinery
+                // entirely — it runs until killed and has no verdict to
+                // emit. Initialise tracing first so the listener's
+                // `tracing::info!` lines reach the terminal.
+                let bind_addr: std::net::SocketAddr = bind.parse().map_err(|e| {
+                    anyhow::anyhow!("--bind expects an addr:port, got `{bind}` ({e})")
+                })?;
+                eprintln!(
+                    "webrtc-doctor {} — dtls serve listening on {bind_addr}",
+                    probe_core::version()
+                );
+                eprintln!("(press Ctrl+C to stop)");
+                serve_forever(bind_addr, |peer| {
+                    eprintln!("  accepted handshake from {peer}");
+                })
+                .await
+                .map_err(|e| anyhow::anyhow!("serve failed: {e}"))?;
+                // serve_forever never returns; this is just to satisfy
+                // the type system.
+                return Ok(());
+            }
+            if let Some(t) = target {
+                // Remote target. Parse host:port, run dns -> dtls.remote.
+                let (host, port) = parse_host_port(&t).map_err(|e| {
+                    anyhow::anyhow!("dtls target must be `host:port`, got `{t}` ({e})")
+                })?;
+                let mut ctx = ProbeContext::new();
+                ctx.host = Some(host.clone());
+                ctx.port = Some(port);
+                let header = format!("probing {host}:{port} (dtls)");
+                (
+                    header,
+                    ctx,
+                    Pipeline::new().push(DnsCheck).push(DtlsRemoteCheck),
+                )
+            } else {
+                let ctx = ProbeContext::new();
+                let header = "dtls loopback (in-process)".to_string();
+                (header, ctx, Pipeline::new().push(DtlsLoopbackCheck))
+            }
         }
         Command::Ice {
             url,
@@ -323,6 +388,39 @@ fn resolve_secret(
         return Ok(flag_value);
     }
     Ok(Some(read_line_from_stdin(label)?))
+}
+
+/// Split a `host:port` string. Accepts bracketed IPv6 literals
+/// (`[::1]:5684`) as well as bare hostnames and IPv4. We don't validate
+/// the host beyond non-empty; if DNS can't resolve it, the dns check
+/// will surface that with a clear error of its own.
+fn parse_host_port(s: &str) -> Result<(String, u16), String> {
+    let (host, port) = if let Some(rest) = s.strip_prefix('[') {
+        // [v6]:port
+        let close = rest
+            .find(']')
+            .ok_or("missing closing `]` for IPv6 literal")?;
+        let host = &rest[..close];
+        let after = &rest[close + 1..];
+        let port = after
+            .strip_prefix(':')
+            .ok_or("expected `:port` after `]`")?;
+        (host, port)
+    } else {
+        // host:port — split on the LAST colon so IPv6 without brackets
+        // gets a clear error rather than silent misparse (we still err
+        // on the safe side and require brackets for v6 literals).
+        let idx = s.rfind(':').ok_or("expected `host:port`")?;
+        if s[..idx].contains(':') {
+            return Err("IPv6 literal must be bracketed, e.g. `[::1]:5684`".into());
+        }
+        (&s[..idx], &s[idx + 1..])
+    };
+    if host.is_empty() {
+        return Err("empty host".into());
+    }
+    let port: u16 = port.parse().map_err(|e| format!("bad port: {e}"))?;
+    Ok((host.to_string(), port))
 }
 
 fn read_line_from_stdin(label: &str) -> anyhow::Result<String> {
