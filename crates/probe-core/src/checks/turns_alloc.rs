@@ -9,24 +9,19 @@
 //!
 //! Wire framing differs from the UDP path: TCP is a byte stream, so each
 //! STUN/TURN message is prefixed by a 2-byte length in network byte order
-//! (RFC 4571 / RFC 5389 §7.2.2).
+//! (RFC 4571 / RFC 5389 §7.2.2). That length-framing is local to this
+//! module; everything STUN/TURN-wire-level (message builders, MI, key
+//! derivation, response parser) is shared with the UDP path via
+//! [`crate::turn_codec`].
 //!
 //! The relay plane stays UDP (REQUESTED-TRANSPORT = 17). TURN-over-TCP
 //! relay allocations (RFC 6062) are a separate, rarer case — not MVP.
-//!
-//! Note: there is duplicated code with `turn_alloc.rs` (message builders,
-//! MI attachment, key derivation, response parser). When a third use case
-//! lands (plain TCP, Refresh, ChannelBind, etc.) the shared bits move to
-//! a `turn_codec` module — explicit follow-up.
 
 use std::net::SocketAddr;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use hmac::{Hmac, Mac};
-use md5::{Digest, Md5};
 use serde_json::json;
-use sha1::Sha1;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpStream;
 use tokio::time::timeout;
@@ -36,19 +31,13 @@ use tokio_rustls::TlsConnector;
 
 use crate::check::{Check, ProbeContext};
 use crate::result::CheckResult;
-use crate::stun_codec::{self as codec, attr};
+use crate::turn_codec::{
+    build_allocate_authed, build_allocate_unauth, long_term_key, parse_allocate_response,
+    AllocateOutcome,
+};
 
 const ID: &str = "turn.alloc.tls";
 const NAME: &str = "TURN allocation (TLS)";
-
-const ALLOCATE_REQUEST: u16 = 0x0003;
-const ALLOCATE_SUCCESS: u16 = 0x0103;
-const ALLOCATE_ERROR: u16 = 0x0113;
-
-/// REQUESTED-TRANSPORT = UDP (IANA protocol number 17). The control plane
-/// is TLS; the relay plane is still UDP. RFC 6062 (TCP relay) is rarer
-/// and not in this check.
-const TRANSPORT_UDP: u32 = 17 << 24;
 
 pub struct TurnsAllocateCheck;
 
@@ -96,8 +85,6 @@ impl Check for TurnsAllocateCheck {
         };
 
         // ── TLS setup ────────────────────────────────────────────────
-        // Mozilla's CA roots, no client auth. Build the config once per
-        // check invocation; rustls is happy with that.
         let mut root_store = RootCertStore::empty();
         root_store.extend(webpki_roots::TLS_SERVER_ROOTS.iter().cloned());
         let tls_config = ClientConfig::builder()
@@ -128,8 +115,7 @@ impl Check for TurnsAllocateCheck {
         };
         let tls_ms = tls_started.elapsed().as_millis() as u64;
 
-        // ── Round 1: unauthenticated Allocate. Always expected to be
-        //          rejected with 401.
+        // ── Round 1: unauthenticated Allocate (expect 401). ──────────
         let (txid1, req1) = build_allocate_unauth();
         if let Err(e) = send_framed(&mut tls, &req1).await {
             return fail_now(started, format!("send (unauth) failed: {e}"));
@@ -195,7 +181,7 @@ impl Check for TurnsAllocateCheck {
             }
         };
 
-        // ── Round 2: authenticated Allocate.
+        // ── Round 2: authenticated Allocate. ─────────────────────────
         let key = long_term_key(&user, &realm, &pass);
         let (txid2, req2) = build_allocate_authed(&user, &realm, &nonce, &key);
         if let Err(e) = send_framed(&mut tls, &req2).await {
@@ -273,177 +259,19 @@ async fn recv_framed<R: AsyncReadExt + Unpin>(r: &mut R) -> std::io::Result<Vec<
     Ok(msg)
 }
 
-// ───── message builders (duplicated from turn_alloc; refactor pending) ──
-
-fn build_allocate_unauth() -> ([u8; 12], Vec<u8>) {
-    let txid = codec::new_txid();
-    let mut msg = stun_header(ALLOCATE_REQUEST, &txid);
-    append_attr(
-        &mut msg,
-        attr::REQUESTED_TRANSPORT,
-        &TRANSPORT_UDP.to_be_bytes(),
-    );
-    set_attrs_length(&mut msg);
-    (txid, msg)
-}
-
-fn build_allocate_authed(
-    username: &str,
-    realm: &str,
-    nonce: &[u8],
-    key: &[u8; 16],
-) -> ([u8; 12], Vec<u8>) {
-    let txid = codec::new_txid();
-    let mut msg = stun_header(ALLOCATE_REQUEST, &txid);
-    append_attr(
-        &mut msg,
-        attr::REQUESTED_TRANSPORT,
-        &TRANSPORT_UDP.to_be_bytes(),
-    );
-    append_attr(&mut msg, attr::USERNAME, username.as_bytes());
-    append_attr(&mut msg, attr::REALM, realm.as_bytes());
-    append_attr(&mut msg, attr::NONCE, nonce);
-    attach_message_integrity(&mut msg, key);
-    (txid, msg)
-}
-
-fn stun_header(method: u16, txid: &[u8; 12]) -> Vec<u8> {
-    let mut msg = Vec::with_capacity(20);
-    msg.extend_from_slice(&method.to_be_bytes());
-    msg.extend_from_slice(&0u16.to_be_bytes());
-    msg.extend_from_slice(&codec::MAGIC_COOKIE.to_be_bytes());
-    msg.extend_from_slice(txid);
-    msg
-}
-
-fn append_attr(msg: &mut Vec<u8>, attr_type: u16, value: &[u8]) {
-    msg.extend_from_slice(&attr_type.to_be_bytes());
-    msg.extend_from_slice(&(value.len() as u16).to_be_bytes());
-    msg.extend_from_slice(value);
-    let pad = (4 - (value.len() % 4)) % 4;
-    for _ in 0..pad {
-        msg.push(0);
-    }
-}
-
-fn set_attrs_length(msg: &mut [u8]) {
-    let attrs_len = (msg.len() - 20) as u16;
-    msg[2..4].copy_from_slice(&attrs_len.to_be_bytes());
-}
-
-fn attach_message_integrity(msg: &mut Vec<u8>, key: &[u8; 16]) {
-    let length_with_mi = (msg.len() - 20 + 24) as u16;
-    msg[2..4].copy_from_slice(&length_with_mi.to_be_bytes());
-    let mut mac = <Hmac<Sha1> as Mac>::new_from_slice(key).expect("HMAC accepts any key length");
-    mac.update(msg);
-    let digest = mac.finalize().into_bytes();
-    msg.extend_from_slice(&attr::MESSAGE_INTEGRITY.to_be_bytes());
-    msg.extend_from_slice(&20u16.to_be_bytes());
-    msg.extend_from_slice(&digest);
-}
-
-fn long_term_key(username: &str, realm: &str, password: &str) -> [u8; 16] {
-    let mut h = Md5::new();
-    h.update(username.as_bytes());
-    h.update(b":");
-    h.update(realm.as_bytes());
-    h.update(b":");
-    h.update(password.as_bytes());
-    let out = h.finalize();
-    let mut key = [0u8; 16];
-    key.copy_from_slice(&out);
-    key
-}
-
-// ───── response parsing (duplicated; refactor pending) ──────────────────
-
-#[derive(Debug)]
-enum AllocateOutcome {
-    Success { relayed: SocketAddr, lifetime: u32 },
-    Unauthorized { realm: String, nonce: Vec<u8> },
-    Error { code: u16, reason: String },
-}
-
-#[derive(Debug, thiserror::Error)]
-enum AllocateError {
-    #[error("{0}")]
-    Codec(#[from] codec::CodecError),
-    #[error("unexpected message type 0x{0:04x}")]
-    WrongType(u16),
-    #[error("missing required attribute {0}")]
-    MissingAttr(&'static str),
-}
-
-fn parse_allocate_response(buf: &[u8], txid: &[u8; 12]) -> Result<AllocateOutcome, AllocateError> {
-    let header = codec::parse_header(buf, txid)?;
-    let attrs = codec::walk_attrs(buf, header.attrs_len)?;
-
-    match header.msg_type {
-        ALLOCATE_SUCCESS => {
-            let mut relayed: Option<SocketAddr> = None;
-            let mut lifetime: u32 = 0;
-            for a in &attrs {
-                match a.attr_type {
-                    attr::XOR_RELAYED_ADDRESS => {
-                        relayed = Some(codec::parse_xor_address(a.value, txid)?);
-                    }
-                    attr::LIFETIME if a.value.len() >= 4 => {
-                        lifetime =
-                            u32::from_be_bytes([a.value[0], a.value[1], a.value[2], a.value[3]]);
-                    }
-                    _ => {}
-                }
-            }
-            let relayed = relayed.ok_or(AllocateError::MissingAttr("XOR-RELAYED-ADDRESS"))?;
-            Ok(AllocateOutcome::Success { relayed, lifetime })
-        }
-        ALLOCATE_ERROR => {
-            let mut code = 0u16;
-            let mut reason = String::new();
-            let mut realm: Option<String> = None;
-            let mut nonce: Option<Vec<u8>> = None;
-            for a in &attrs {
-                match a.attr_type {
-                    attr::ERROR_CODE => {
-                        let ec = codec::parse_error_code(a.value)?;
-                        code = ec.code;
-                        reason = ec.reason;
-                    }
-                    attr::REALM => {
-                        realm = Some(String::from_utf8_lossy(a.value).into_owned());
-                    }
-                    attr::NONCE => nonce = Some(a.value.to_vec()),
-                    _ => {}
-                }
-            }
-            if code == 401 {
-                Ok(AllocateOutcome::Unauthorized {
-                    realm: realm.ok_or(AllocateError::MissingAttr("REALM"))?,
-                    nonce: nonce.ok_or(AllocateError::MissingAttr("NONCE"))?,
-                })
-            } else {
-                Ok(AllocateOutcome::Error { code, reason })
-            }
-        }
-        other => Err(AllocateError::WrongType(other)),
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    // The wire-level builders and parser are byte-for-byte identical to
-    // their counterparts in `turn_alloc.rs`, which already has thorough
-    // unit coverage. We focus this module's tests on the framing helpers
-    // and the TLS plumbing assumptions.
+    // The wire-level builders and parser have unit tests in
+    // `crate::turn_codec`. This module only owns the 2-byte length
+    // framing, so that's all we exercise here.
 
     #[tokio::test]
     async fn framing_roundtrip() {
         let payload = b"hello-stun";
         let mut framed = Vec::new();
         send_framed(&mut framed, payload).await.unwrap();
-        // 2-byte length prefix + payload bytes
         assert_eq!(framed.len(), 2 + payload.len());
         assert_eq!(
             u16::from_be_bytes([framed[0], framed[1]]),
@@ -469,15 +297,5 @@ mod tests {
         let got_b = recv_framed(&mut cursor).await.unwrap();
         assert_eq!(got_a, a);
         assert_eq!(got_b, b);
-    }
-
-    #[test]
-    fn allocate_unauth_layout_matches_udp_path() {
-        let (_txid, msg) = build_allocate_unauth();
-        // Same on-the-wire shape as the UDP allocator's unauth request.
-        assert_eq!(&msg[0..2], &ALLOCATE_REQUEST.to_be_bytes());
-        let attrs_len = u16::from_be_bytes([msg[2], msg[3]]) as usize;
-        assert_eq!(attrs_len, msg.len() - 20);
-        assert_eq!(msg.len(), 20 + 8); // header + one 8-byte REQUESTED-TRANSPORT
     }
 }

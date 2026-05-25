@@ -10,6 +10,7 @@ pub mod checks;
 pub mod pipeline;
 pub mod result;
 pub mod stun_codec;
+pub mod turn_codec;
 
 pub use check::{Check, ProbeContext, TurnSession};
 pub use pipeline::{Pipeline, Report, Verdict};

@@ -45,21 +45,18 @@
 use std::net::SocketAddr;
 use std::time::{Duration, Instant};
 
-use hmac::{Hmac, Mac};
 use serde_json::json;
-use sha1::Sha1;
 use tokio::time::timeout;
 
 use crate::check::{Check, ProbeContext};
 use crate::result::CheckResult;
 use crate::stun_codec::{self as codec, attr};
+use crate::turn_codec::{
+    self as turn, CREATE_PERMISSION_ERROR, CREATE_PERMISSION_REQUEST, CREATE_PERMISSION_SUCCESS,
+};
 
 const ID: &str = "turn.echo.udp";
 const NAME: &str = "TURN echo (UDP)";
-
-const CREATE_PERMISSION_REQUEST: u16 = 0x0008;
-const CREATE_PERMISSION_SUCCESS: u16 = 0x0108;
-const CREATE_PERMISSION_ERROR: u16 = 0x0118;
 
 /// Data Indication: method 0x007, class indication (0b01 in the type bits).
 const DATA_INDICATION: u16 = 0x0017;
@@ -314,48 +311,14 @@ fn build_create_permission(
     peer: SocketAddr,
 ) -> ([u8; 12], Vec<u8>) {
     let txid = codec::new_txid();
-    let mut msg = stun_header(CREATE_PERMISSION_REQUEST, &txid);
+    let mut msg = turn::stun_header(CREATE_PERMISSION_REQUEST, &txid);
     let peer_attr = codec::build_xor_address(peer, &txid);
-    append_attr(&mut msg, attr::XOR_PEER_ADDRESS, &peer_attr);
-    append_attr(&mut msg, attr::USERNAME, username.as_bytes());
-    append_attr(&mut msg, attr::REALM, realm.as_bytes());
-    append_attr(&mut msg, attr::NONCE, nonce);
-    attach_message_integrity(&mut msg, key);
+    turn::append_attr(&mut msg, attr::XOR_PEER_ADDRESS, &peer_attr);
+    turn::append_attr(&mut msg, attr::USERNAME, username.as_bytes());
+    turn::append_attr(&mut msg, attr::REALM, realm.as_bytes());
+    turn::append_attr(&mut msg, attr::NONCE, nonce);
+    turn::attach_message_integrity(&mut msg, key);
     (txid, msg)
-}
-
-fn stun_header(method: u16, txid: &[u8; 12]) -> Vec<u8> {
-    let mut msg = Vec::with_capacity(20);
-    msg.extend_from_slice(&method.to_be_bytes());
-    msg.extend_from_slice(&0u16.to_be_bytes()); // length, fixed up later
-    msg.extend_from_slice(&codec::MAGIC_COOKIE.to_be_bytes());
-    msg.extend_from_slice(txid);
-    msg
-}
-
-fn append_attr(msg: &mut Vec<u8>, attr_type: u16, value: &[u8]) {
-    msg.extend_from_slice(&attr_type.to_be_bytes());
-    msg.extend_from_slice(&(value.len() as u16).to_be_bytes());
-    msg.extend_from_slice(value);
-    let pad = (4 - (value.len() % 4)) % 4;
-    for _ in 0..pad {
-        msg.push(0);
-    }
-}
-
-/// Same length-fixup trick as turn_alloc::attach_message_integrity.
-/// Duplicated here rather than promoted to stun_codec because the
-/// helpers in stun_codec are deliberately decode-only; building
-/// auth'd requests is a check-level concern.
-fn attach_message_integrity(msg: &mut Vec<u8>, key: &[u8; 16]) {
-    let length_with_mi = (msg.len() - 20 + 24) as u16;
-    msg[2..4].copy_from_slice(&length_with_mi.to_be_bytes());
-    let mut mac = <Hmac<Sha1> as Mac>::new_from_slice(key).expect("HMAC accepts any key length");
-    mac.update(msg);
-    let digest = mac.finalize().into_bytes();
-    msg.extend_from_slice(&attr::MESSAGE_INTEGRITY.to_be_bytes());
-    msg.extend_from_slice(&20u16.to_be_bytes());
-    msg.extend_from_slice(&digest);
 }
 
 // ───── response parsing ────────────────────────────────────────────────
@@ -498,7 +461,7 @@ mod tests {
         buf.extend_from_slice(&codec::MAGIC_COOKIE.to_be_bytes());
         buf.extend_from_slice(&txid);
         let body_start = buf.len();
-        append_attr(&mut buf, attr::ERROR_CODE, {
+        turn::append_attr(&mut buf, attr::ERROR_CODE, {
             let mut v = vec![0, 0, 4, 38]; // class 4, number 38 → 438 Stale Nonce
             v.extend_from_slice(b"Stale Nonce");
             &v.clone()
@@ -524,7 +487,7 @@ mod tests {
         buf.extend_from_slice(&codec::MAGIC_COOKIE.to_be_bytes());
         buf.extend_from_slice(&txid);
         let body_start = buf.len();
-        append_attr(&mut buf, attr::DATA, b"hello");
+        turn::append_attr(&mut buf, attr::DATA, b"hello");
         let attrs_len = (buf.len() - body_start) as u16;
         buf[2..4].copy_from_slice(&attrs_len.to_be_bytes());
 
