@@ -20,6 +20,8 @@ hmac = "0.12"
 sha1 = "0.10"
 md-5 = "0.10"
 tokio-tungstenite = { workspace = true }
+tokio-rustls = { workspace = true }
+webpki-roots = { workspace = true }
 # WebRTC stack — added per-check as we implement them.
 # webrtc-ice = "0.10"
 # webrtc-dtls = "0.8"

@@ -459,8 +459,10 @@ dependencies = [
  "sha1",
  "thiserror",
  "tokio",
+ "tokio-rustls",
  "tokio-tungstenite",
  "tracing",
+ "webpki-roots 0.26.11",
 ]
 
 [[package]]

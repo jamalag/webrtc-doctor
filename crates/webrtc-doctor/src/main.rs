@@ -14,6 +14,7 @@ use probe_core::{
         stun::StunBindingCheck,
         turn_alloc::TurnAllocateCheck,
         turn_echo::TurnEchoCheck,
+        turns_alloc::TurnsAllocateCheck,
     },
     Pipeline, ProbeContext,
 };
@@ -164,9 +165,11 @@ async fn main() -> anyhow::Result<()> {
             ctx.turn_user = resolve_secret(user, user_stdin, "TURN username")?;
             ctx.turn_pass = resolve_secret(pass, pass_stdin, "TURN password")?;
             let header = format!("probing {} (turns)", t.host);
-            // TLS isn't UDP — STUN binding doesn't belong here; checks land
-            // alongside the TLS handshake step.
-            (header, ctx, Pipeline::new().push(DnsCheck))
+            (
+                header,
+                ctx,
+                Pipeline::new().push(DnsCheck).push(TurnsAllocateCheck),
+            )
         }
         Command::Signaling { url, auth_header } => {
             // Validate scheme up front so the user gets a clear error

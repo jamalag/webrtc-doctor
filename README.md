@@ -43,11 +43,12 @@ prefixes — real runs print real ones, in ANSI color on a TTY.)
 
 ## Status
 
-v0.1.0 is the first public release. Working checks: DNS, STUN binding,
-TURN allocation over UDP (long-term credentials), TURN echo round-trip
-(data-plane verification), and signaling WS/WSS connect. TURNS over TLS,
-DTLS handshake loopback, and ICE candidate gathering are planned for
-v0.2.0 — see [`docs/PLAN.md`](docs/PLAN.md) for the design and roadmap.
+v0.1.0 is the first public release; `main` is moving toward v0.2.0.
+Working checks today: DNS, STUN binding, TURN allocation over UDP
+(long-term credentials), TURN echo round-trip (data-plane verification),
+TURN allocation over TLS (TURNS), and signaling WS/WSS connect.
+DTLS handshake loopback and ICE candidate gathering are still planned
+— see [`docs/PLAN.md`](docs/PLAN.md) for the design and roadmap.
 
 ## Why
 
@@ -272,6 +273,26 @@ printf '%s\n%s\n' \
 | webrtc-doctor turn "$(jq -r '.uris[0]' <<<"$creds" | sed 's/?.*//')" \
     --user-stdin --pass-stdin
 ```
+
+### Probe a TURN-over-TLS server (TURNS)
+
+Most production WebRTC deployments expose TURNS — TURN tunneled over
+TLS-over-TCP — so the relay path can survive corporate firewalls that
+block UDP and proxy-aware setups that only allow `:443`. The wire
+protocol is the same as plain TURN; the transport is TLS-over-TCP with
+a 2-byte length prefix per STUN/TURN message.
+
+```sh
+# Default TURNS port (5349):
+webrtc-doctor turns turns:turn.example.com:5349 --user alice --pass s3cret
+
+# Or :443 for firewall traversal:
+webrtc-doctor turns turns:turn.example.com:443 --user-stdin --pass-stdin
+```
+
+The check reports total time and a `tls_handshake_ms` breakdown in
+the `--json` detail, so you can see whether slowness is in the TLS
+setup vs the TURN allocation itself.
 
 ### Probe a signaling endpoint (WS / WSS)
 
