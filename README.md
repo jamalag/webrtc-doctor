@@ -320,8 +320,16 @@ webrtc-doctor 0.1.0 — probing signal.example.com (signaling)
 ```
 
 The Authorization header has the same secret-handling caveats as TURN
-credentials (visible in argv, shell history, process listings). A
-`--auth-header-stdin` companion flag is tracked as a follow-up.
+credentials (visible in argv, shell history, process listings). For
+any real token, use `--auth-header-stdin` instead:
+
+```sh
+printf '%s\n' "Bearer $TOKEN" \
+  | webrtc-doctor signaling wss://signal.example.com/ --auth-header-stdin
+```
+
+`--auth-header` and `--auth-header-stdin` are mutually exclusive
+(clap rejects the combination at parse time).
 
 ### Machine-readable output
 

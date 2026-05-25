@@ -86,10 +86,13 @@ enum Command {
         /// e.g. wss://signal.example.com/
         url: String,
         /// Full Authorization header value (e.g. "Bearer eyJ...").
-        /// Same security caveats as TURN creds — prefer the env-var or
-        /// stdin-based variants once those land (tracked).
-        #[arg(long)]
+        /// Visible in argv + shell history — prefer `--auth-header-stdin`
+        /// for any real token.
+        #[arg(long, conflicts_with = "auth_header_stdin")]
         auth_header: Option<String>,
+        /// Read the full Authorization header value from stdin (one line).
+        #[arg(long)]
+        auth_header_stdin: bool,
     },
     /// Run the full suite against a deployment.
     Full {
@@ -171,7 +174,11 @@ async fn main() -> anyhow::Result<()> {
                 Pipeline::new().push(DnsCheck).push(TurnsAllocateCheck),
             )
         }
-        Command::Signaling { url, auth_header } => {
+        Command::Signaling {
+            url,
+            auth_header,
+            auth_header_stdin,
+        } => {
             // Validate scheme up front so the user gets a clear error
             // instead of tungstenite's generic "URL scheme not supported"
             // surfacing two checks deep into the pipeline.
@@ -189,8 +196,9 @@ async fn main() -> anyhow::Result<()> {
             ctx.host = Some(host.clone());
             let header = format!("probing {host} (signaling)");
 
+            let auth = resolve_secret(auth_header, auth_header_stdin, "Authorization header")?;
             let mut sig = SignalingCheck::new(&url);
-            if let Some(h) = auth_header {
+            if let Some(h) = auth {
                 sig = sig.with_auth_header(h);
             }
             (header, ctx, Pipeline::new().push(DnsCheck).push(sig))
