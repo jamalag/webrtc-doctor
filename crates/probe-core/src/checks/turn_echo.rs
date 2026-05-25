@@ -28,10 +28,14 @@
 //! on the same 5-tuple we already established with the TURN server, so it
 //! works through any NAT type.
 //!
-//! What this check does *not* attempt in MVP:
-//! - Multiple packets for loss / jitter statistics — single round-trip
-//!   establishes the binary "relay relays" signal, multi-packet stats are
-//!   a follow-up.
+//! Multi-packet behaviour: the check sends `ctx.echo_count` packets at a
+//! small fixed interval, each carrying a sequence number, then collects
+//! Data Indications back. The verdict is Pass on zero loss, Warn on
+//! partial loss (relay reachable but lossy), Fail on 100% loss. Per-
+//! packet RTTs are summarized as min/avg/max in the report and exposed
+//! as a JSON array under `rtt_ms` for downstream tooling.
+//!
+//! What this check does *not* attempt:
 //! - Channel binding (4-byte channel header). Send/Data Indications
 //!   prove the relay path; channels are a high-rate optimization.
 //! - 438 Stale Nonce recovery. If CreatePermission gets a fresh nonce
@@ -60,10 +64,37 @@ const CREATE_PERMISSION_ERROR: u16 = 0x0118;
 /// Data Indication: method 0x007, class indication (0b01 in the type bits).
 const DATA_INDICATION: u16 = 0x0017;
 
-/// A small, recognizable payload so we can tell our echo apart from any
+/// A small, recognizable prefix so we can tell our echo apart from any
 /// unsolicited noise the relay might wrap-and-forward (vanishingly unlikely
-/// on a fresh allocation, but worth filtering for).
-const ECHO_PAYLOAD: &[u8] = b"webrtc-doctor-echo-probe";
+/// on a fresh allocation, but worth filtering for). Each sent packet is
+/// `ECHO_PREFIX` followed by a 4-byte little-endian sequence number.
+const ECHO_PREFIX: &[u8] = b"webrtc-doctor-echo-probe";
+
+/// Gap between successive sends. Small enough that a 10-packet run finishes
+/// in ~200 ms; large enough to avoid back-to-back bursts that a server-side
+/// rate limiter might lump together.
+const ECHO_INTERVAL: Duration = Duration::from_millis(20);
+
+fn make_payload(seq: u32) -> Vec<u8> {
+    let mut p = Vec::with_capacity(ECHO_PREFIX.len() + 4);
+    p.extend_from_slice(ECHO_PREFIX);
+    p.extend_from_slice(&seq.to_le_bytes());
+    p
+}
+
+/// Extract the sequence number from a payload that looks like one of ours.
+/// Returns `None` for anything that doesn't match the exact prefix+length
+/// shape — keeps stray inbound data from polluting the stats.
+fn parse_seq(payload: &[u8]) -> Option<u32> {
+    if payload.len() != ECHO_PREFIX.len() + 4 {
+        return None;
+    }
+    if &payload[..ECHO_PREFIX.len()] != ECHO_PREFIX {
+        return None;
+    }
+    let seq_bytes: [u8; 4] = payload[ECHO_PREFIX.len()..].try_into().ok()?;
+    Some(u32::from_le_bytes(seq_bytes))
+}
 
 pub struct TurnEchoCheck;
 
@@ -102,6 +133,7 @@ impl Check for TurnEchoCheck {
         } else {
             ctx.default_timeout
         };
+        let count = ctx.echo_count.max(1);
 
         // ── Step 1: CreatePermission against the existing allocation,
         //          permitting our own srflx as a peer.
@@ -142,65 +174,130 @@ impl Check for TurnEchoCheck {
             Err(e) => return fail_now(started, format!("malformed CreatePermission resp: {e}")),
         }
 
-        // ── Step 2: Send raw UDP directly to the relay address. We're
-        //          acting as our own peer here — the relay sees the
-        //          source as our srflx (which we just permitted) and
-        //          will wrap the payload in a Data Indication forwarded
-        //          back to us via the control channel.
-        let echo_started = Instant::now();
-        if let Err(e) = session.socket.send_to(ECHO_PAYLOAD, session.relayed).await {
-            return fail_now(started, format!("send to relay failed: {e}"));
-        }
-
-        // ── Step 3: Wait for the Data Indication on the control channel.
-        //          Source must be the TURN server's listening port (where
-        //          control-channel traffic comes from). Filter on source
-        //          to ignore any stray STUN response that might race.
-        loop {
-            if started.elapsed() >= recv_timeout {
-                return fail_now(started, format!("no echo received within {recv_timeout:?}"));
+        // ── Step 2: Send `count` raw UDP packets directly to the relay
+        //          address, spaced by ECHO_INTERVAL. We're acting as our
+        //          own peer — the relay sees the source as our srflx
+        //          (which we just permitted) and wraps each payload in a
+        //          Data Indication forwarded back via the control channel.
+        let mut send_times: Vec<Option<Instant>> = vec![None; count as usize];
+        for seq in 0..count {
+            let payload = make_payload(seq);
+            let now = Instant::now();
+            if let Err(e) = session.socket.send_to(&payload, session.relayed).await {
+                return fail_now(started, format!("send packet {seq} to relay failed: {e}"));
             }
-            let remaining = recv_timeout - started.elapsed();
+            send_times[seq as usize] = Some(now);
+            if seq + 1 < count {
+                tokio::time::sleep(ECHO_INTERVAL).await;
+            }
+        }
+        // Stragglers get the full recv_timeout *after* the last send so a
+        // large --echo-count doesn't get the clock yanked out from under it.
+        let last_send = send_times
+            .iter()
+            .filter_map(|t| *t)
+            .max()
+            .unwrap_or_else(Instant::now);
+        let recv_deadline = last_send + recv_timeout;
+
+        // ── Step 3: Collect Data Indications until every seq is accounted
+        //          for or the deadline elapses. Source must be the TURN
+        //          server's listening port (control channel). Filter on
+        //          source to ignore any stray STUN response that races.
+        let mut rtts: Vec<Option<Duration>> = vec![None; count as usize];
+        let mut received = 0u32;
+        let mut duplicates = 0u32;
+
+        while received < count {
+            let now = Instant::now();
+            if now >= recv_deadline {
+                break;
+            }
+            let remaining = recv_deadline - now;
             let (n, from) = match timeout(remaining, session.socket.recv_from(&mut buf)).await {
                 Ok(Ok(v)) => v,
                 Ok(Err(e)) => return fail_now(started, format!("recv echo failed: {e}")),
-                Err(_) => return fail_now(started, format!("echo timeout after {recv_timeout:?}")),
+                Err(_) => break, // deadline hit — break to summarize what we have
             };
             if from != session.server {
-                // Not from the control channel — ignore (could be stray
-                // inbound, though on a fresh allocation this is rare).
                 continue;
             }
-            match parse_data_indication(&buf[..n]) {
-                Ok(Some(data)) if data == ECHO_PAYLOAD => {
-                    let echo_ms = echo_started.elapsed().as_millis() as u64;
-                    let total_ms = started.elapsed().as_millis() as u64;
-                    return CheckResult::pass(
-                        ID,
-                        NAME,
-                        total_ms,
-                        format!(
-                            "{}-byte round-trip {} ms via {} (peer-as-self path)",
-                            data.len(),
-                            echo_ms,
-                            session.relayed,
-                        ),
-                    )
-                    .with_detail(json!({
-                        "server": session.server.to_string(),
-                        "relayed": session.relayed.to_string(),
-                        "peer": srflx.to_string(),
-                        "payload_bytes": data.len(),
-                        "round_trip_ms": echo_ms,
-                        "path": "client→relay→data-indication",
-                    }));
-                }
-                // Either not a Data Indication, or a Data Indication
-                // carrying something other than our payload — keep waiting.
+            let data = match parse_data_indication(&buf[..n]) {
+                Ok(Some(d)) => d,
                 _ => continue,
+            };
+            let seq = match parse_seq(&data) {
+                Some(s) if (s as usize) < rtts.len() => s,
+                _ => continue, // not one of ours, or out-of-range seq
+            };
+            let recv_at = Instant::now();
+            let send_at = match send_times[seq as usize] {
+                Some(t) => t,
+                None => continue,
+            };
+            if rtts[seq as usize].is_some() {
+                duplicates += 1;
+                continue;
             }
+            rtts[seq as usize] = Some(recv_at - send_at);
+            received += 1;
+        }
+
+        let total_ms = started.elapsed().as_millis() as u64;
+        let rtt_ms_each: Vec<Option<u64>> = rtts
+            .iter()
+            .map(|d| d.map(|x| x.as_millis() as u64))
+            .collect();
+        let observed: Vec<u64> = rtt_ms_each.iter().filter_map(|x| *x).collect();
+        let loss_pct = ((count - received) as f64) * 100.0 / count as f64;
+
+        let detail = json!({
+            "server": session.server.to_string(),
+            "relayed": session.relayed.to_string(),
+            "peer": srflx.to_string(),
+            "sent": count,
+            "received": received,
+            "duplicates": duplicates,
+            "loss_pct": loss_pct,
+            "rtt_ms": rtt_ms_each,
+            "path": "client→relay→data-indication",
+        });
+
+        if received == 0 {
+            return CheckResult::fail(
+                ID,
+                NAME,
+                total_ms,
+                format!(
+                    "0/{count} echoes received within {recv_timeout:?} (relay: {})",
+                    session.relayed,
+                ),
+            )
+            .with_detail(detail);
+        }
+
+        let (min_ms, avg_ms, max_ms) = stats(&observed);
+        let summary = format!(
+            "{}/{} echoes, loss {:.0}%, rtt min/avg/max = {}/{}/{} ms via {}",
+            received, count, loss_pct, min_ms, avg_ms, max_ms, session.relayed,
+        );
+        if received == count {
+            CheckResult::pass(ID, NAME, total_ms, summary).with_detail(detail)
+        } else {
+            CheckResult::warn(ID, NAME, total_ms, summary).with_detail(detail)
         }
     }
+}
+
+fn stats(rtts_ms: &[u64]) -> (u64, u64, u64) {
+    let min = *rtts_ms.iter().min().unwrap_or(&0);
+    let max = *rtts_ms.iter().max().unwrap_or(&0);
+    let avg = if rtts_ms.is_empty() {
+        0
+    } else {
+        rtts_ms.iter().sum::<u64>() / rtts_ms.len() as u64
+    };
+    (min, avg, max)
 }
 
 fn fail_now(started: Instant, msg: String) -> CheckResult {
@@ -433,6 +530,35 @@ mod tests {
 
         let data = parse_data_indication(&buf).unwrap().expect("DATA present");
         assert_eq!(data, b"hello");
+    }
+
+    #[test]
+    fn payload_roundtrips_sequence_number() {
+        for seq in [0u32, 1, 9, 255, 256, u32::MAX] {
+            let p = make_payload(seq);
+            assert_eq!(p.len(), ECHO_PREFIX.len() + 4);
+            assert_eq!(parse_seq(&p), Some(seq));
+        }
+    }
+
+    #[test]
+    fn parse_seq_rejects_non_matching_payloads() {
+        // Wrong prefix.
+        assert_eq!(parse_seq(b"some-other-payload-xxxxxx____"), None);
+        // Right prefix but wrong length (no seq suffix).
+        assert_eq!(parse_seq(ECHO_PREFIX), None);
+        // Right prefix, too short by one byte.
+        let mut short = ECHO_PREFIX.to_vec();
+        short.extend_from_slice(&[0u8; 3]);
+        assert_eq!(parse_seq(&short), None);
+    }
+
+    #[test]
+    fn stats_handles_typical_input() {
+        let (mn, av, mx) = stats(&[5, 10, 15, 20]);
+        assert_eq!((mn, av, mx), (5, 12, 20));
+        assert_eq!(stats(&[]), (0, 0, 0));
+        assert_eq!(stats(&[7]), (7, 7, 7));
     }
 
     #[test]

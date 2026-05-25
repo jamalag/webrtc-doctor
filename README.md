@@ -28,7 +28,7 @@ webrtc-doctor 0.1.0 — probing turn.example.com (turn)
   ✓ dns             turn.example.com → 203.0.113.10 (7 ms)
   ✓ stun.binding    srflx 198.51.100.42:53440 (171 ms)
   ✓ turn.alloc.udp  relay 203.0.113.10:49171 (lifetime 600s, 349 ms)
-  ✓ turn.echo.udp   24-byte round-trip 169 ms via 203.0.113.10:49171 (peer-as-self path)
+  ✓ turn.echo.udp   10/10 echoes, loss 0%, rtt min/avg/max = 162/169/178 ms via 203.0.113.10:49171
 
 4 pass · 0 warn · 0 fail · 0 skip        verdict: HEALTHY
 ```
@@ -152,15 +152,19 @@ webrtc-doctor 0.1.0 — probing turn.example.com (turn)
   ✓ dns             turn.example.com → 203.0.113.10 (12 ms)
   ✓ stun.binding    srflx 198.51.100.42:52114 (31 ms)
   ✓ turn.alloc.udp  relay 203.0.113.10:49152 (lifetime 600s, 74 ms)
-  ✓ turn.echo.udp   24-byte round-trip 169 ms via 203.0.113.10:49152 (peer-as-self path)
+  ✓ turn.echo.udp   10/10 echoes, loss 0%, rtt min/avg/max = 162/169/178 ms via 203.0.113.10:49152
 
 4 pass · 0 warn · 0 fail · 0 skip        verdict: HEALTHY
 ```
 
 The `turn.echo.udp` step actually moves bytes through the relay
-(CreatePermission → datagram → Data Indication round-trip), so a green
+(CreatePermission → datagrams → Data Indications round-trip), so a green
 row here proves the data plane works — not just that allocation
-succeeded.
+succeeded. By default it sends 10 packets so a single run carries a
+loss% figure; pass `--echo-count 1` for a fast pass/fail signal, or
+`--echo-count 50` (etc.) to characterize a flaky relay. Any non-zero
+loss downgrades the row to a yellow warning so partial-loss conditions
+don't masquerade as healthy.
 
 Run with no `--user` / `--pass` and you'll still get a useful signal:
 the server's `401 Unauthorized` is reported as a warning with the auth
@@ -397,14 +401,17 @@ realm, allocation lifetime, etc.).
       "id": "turn.echo.udp",
       "name": "TURN echo (UDP)",
       "status": "pass",
-      "latency_ms": 169,
-      "summary": "24-byte round-trip 169 ms via 203.0.113.10:49161 (peer-as-self path)",
+      "latency_ms": 1872,
+      "summary": "10/10 echoes, loss 0%, rtt min/avg/max = 162/169/178 ms via 203.0.113.10:49161",
       "detail": {
         "path": "client→relay→data-indication",
-        "payload_bytes": 24,
+        "sent": 10,
+        "received": 10,
+        "duplicates": 0,
+        "loss_pct": 0.0,
+        "rtt_ms": [168, 162, 171, 169, 165, 178, 167, 170, 169, 171],
         "peer": "198.51.100.42:52948",
         "relayed": "203.0.113.10:49161",
-        "round_trip_ms": 169,
         "server": "203.0.113.10:3478"
       }
     }

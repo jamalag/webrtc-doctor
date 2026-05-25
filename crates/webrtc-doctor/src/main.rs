@@ -63,6 +63,11 @@ enum Command {
         /// Read TURN password from stdin (one line).
         #[arg(long)]
         pass_stdin: bool,
+        /// Number of echo packets to send through the relay. Default 10 so
+        /// the report carries a loss% figure on a single run; use 1 for a
+        /// fast binary pass/fail.
+        #[arg(long, default_value_t = 10)]
+        echo_count: u32,
     },
     /// Probe a TURN-over-TLS server (TURNS).
     Turns {
@@ -136,6 +141,7 @@ async fn main() -> anyhow::Result<()> {
             pass,
             user_stdin,
             pass_stdin,
+            echo_count,
         } => {
             let t = target::parse_stun_like(&url, &["turn"], 3478)?;
             let mut ctx = ProbeContext::new();
@@ -143,6 +149,7 @@ async fn main() -> anyhow::Result<()> {
             ctx.port = Some(t.port);
             ctx.turn_user = resolve_secret(user, user_stdin, "TURN username")?;
             ctx.turn_pass = resolve_secret(pass, pass_stdin, "TURN password")?;
+            ctx.echo_count = echo_count;
             let header = format!("probing {} (turn)", t.host);
             (
                 header,

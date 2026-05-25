@@ -25,6 +25,10 @@ pub struct ProbeContext {
     /// TURN credentials, when supplied.
     pub turn_user: Option<String>,
     pub turn_pass: Option<String>,
+    /// How many packets the TURN echo check should send. Defaults to 10 so
+    /// the operator can see a loss% figure on a single run ("10/10
+    /// received"). Set to 1 for a fast pass/fail signal.
+    pub echo_count: u32,
     /// Post-allocation TURN session state. Populated by `turn.alloc.udp` and
     /// consumed by `turn.echo.udp` so the echo check can reuse the same
     /// authenticated socket (and same nonce/key) instead of allocating again.
@@ -63,6 +67,7 @@ impl ProbeContext {
     pub fn new() -> Self {
         Self {
             default_timeout: Duration::from_secs(5),
+            echo_count: 10,
             ..Self::default()
         }
     }
