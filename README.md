@@ -13,7 +13,7 @@ Like `mtr` or `dig`, but for WebRTC.
 **❌ Authentication broken** (expired or wrong credentials):
 
 ```text
-webrtc-doctor 0.1.0 — probing turn.example.com (turn)
+webrtc-doctor 0.7.0 — probing turn.example.com (turn)
   ✓ dns             turn.example.com → 203.0.113.10 (7 ms)
   ✓ stun.binding    srflx 198.51.100.42:64070 (181 ms)
   ✗ turn.alloc.udp  server rejected long-term credentials (401 after auth)
@@ -24,7 +24,7 @@ webrtc-doctor 0.1.0 — probing turn.example.com (turn)
 **✅ Authentication working** (fresh credentials, full data-plane round-trip):
 
 ```text
-webrtc-doctor 0.1.0 — probing turn.example.com (turn)
+webrtc-doctor 0.7.0 — probing turn.example.com (turn)
   ✓ dns             turn.example.com → 203.0.113.10 (7 ms)
   ✓ stun.binding    srflx 198.51.100.42:53440 (171 ms)
   ✓ turn.alloc.udp  relay 203.0.113.10:49171 (lifetime 600s, 349 ms)
@@ -43,13 +43,15 @@ prefixes — real runs print real ones, in ANSI color on a TTY.)
 
 ## Status
 
-Latest release is v0.4.0; `main` is moving toward v0.5.0. Working
-checks today: DNS, STUN binding, TURN allocation over UDP (long-term
-credentials), multi-packet TURN echo (data-plane loss/jitter stats),
-TURN allocation over TLS (TURNS), signaling WS/WSS connect, ICE
-candidate gathering (host + srflx + relay), and DTLS handshake
-loopback (in-process smoke test). The MVP roadmap from
-[`docs/PLAN.md`](docs/PLAN.md) is essentially complete.
+Latest release is v0.7.0. Working checks today: DNS, STUN binding,
+TURN allocation over UDP (long-term credentials), multi-packet TURN
+echo (data-plane loss/jitter stats), TURN allocation over TLS (TURNS),
+signaling WS/WSS connect, ICE candidate gathering (host + srflx +
+relay), DTLS handshake loopback (in-process smoke test), and DTLS
+remote handshake against a peer (`dtls --serve` turns a second
+instance into a test peer). A `full` subcommand runs the whole
+pipeline across multiple URLs and emits a single verdict. The MVP
+roadmap from [`docs/PLAN.md`](docs/PLAN.md) is essentially complete.
 
 ## Why
 
@@ -120,7 +122,7 @@ webrtc-doctor stun stun:stun.l.google.com:19302
 Expected output:
 
 ```
-webrtc-doctor 0.1.0 — probing stun.l.google.com (stun)
+webrtc-doctor 0.7.0 — probing stun.l.google.com (stun)
   ✓ dns           stun.l.google.com → 74.125.250.129 (15 ms)
   ✓ stun.binding  srflx 203.0.113.42:52114 (89 ms)
 
@@ -149,7 +151,7 @@ printf '%s\n%s\n' "$USER" "$PASS" \
 Expected output on success:
 
 ```
-webrtc-doctor 0.1.0 — probing turn.example.com (turn)
+webrtc-doctor 0.7.0 — probing turn.example.com (turn)
   ✓ dns             turn.example.com → 203.0.113.10 (12 ms)
   ✓ stun.binding    srflx 198.51.100.42:52114 (31 ms)
   ✓ turn.alloc.udp  relay 203.0.113.10:49152 (lifetime 600s, 74 ms)
@@ -317,7 +319,7 @@ webrtc-doctor signaling wss://signal.example.com/ \
 Expected output:
 
 ```
-webrtc-doctor 0.1.0 — probing signal.example.com (signaling)
+webrtc-doctor 0.7.0 — probing signal.example.com (signaling)
   ✓ dns        signal.example.com → 203.0.113.30 (15 ms)
   ✓ signaling  wss connected, HTTP 101 (203 ms, auth OK)
 
