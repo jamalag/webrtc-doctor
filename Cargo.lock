@@ -988,7 +988,7 @@ dependencies = [
 
 [[package]]
 name = "probe-core"
-version = "0.1.0"
+version = "0.7.0"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -1637,7 +1637,7 @@ dependencies = [
 
 [[package]]
 name = "webrtc-doctor"
-version = "0.1.0"
+version = "0.7.0"
 dependencies = [
  "anyhow",
  "clap",
